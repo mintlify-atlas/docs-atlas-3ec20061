@@ -1,0 +1,176 @@
+---
+title: "InfluxDB & Grafana"
+description: "Export evcc metrics to InfluxDB and visualize them with Grafana dashboards."
+---
+
+evcc can continuously stream its state data to an InfluxDB time-series database. Every parameter evcc tracks — power flows, charging states, vehicle SoC, tariff prices — is written as a separate measurement. You can then build rich Grafana dashboards on top of this data.
+
+## Configuration
+
+Add the `influx` section to your `evcc.yaml`:
+
+```yaml
+influx:
+  url: http://localhost:8086
+  database: evcc
+  user: myuser       # optional
+  password: mypass   # optional
+```
+
+<ParamField body="url" type="string" required>
+  Full URL of your InfluxDB instance, including scheme and port. For InfluxDB v2 or InfluxDB Cloud, use your cluster URL.
+</ParamField>
+
+<ParamField body="database" type="string" required>
+  InfluxDB v1 database name, or InfluxDB v2 bucket name.
+</ParamField>
+
+<ParamField body="user" type="string">
+  InfluxDB username (v1) or the string `ignored` when using a token.
+</ParamField>
+
+<ParamField body="password" type="string">
+  InfluxDB password (v1) or API token (v2). For InfluxDB v2, set `user` to any non-empty value and put the token in `password`.
+</ParamField>
+
+<Note>
+evcc uses the InfluxDB v2 client library with v1 compatibility mode. For InfluxDB v1, provide `user` and `password` directly. For InfluxDB v2, leave `user` empty and set `password` to your API token — evcc will combine them as `user:token` internally.
+</Note>
+
+---
+
+## InfluxDB v2 setup
+
+<Steps>
+  <Step title="Create a bucket">
+    In the InfluxDB UI, go to **Load Data → Buckets** and create a new bucket named `evcc`.
+  </Step>
+  <Step title="Create an API token">
+    Go to **Load Data → API Tokens** and generate a token with read/write access to the `evcc` bucket.
+  </Step>
+  <Step title="Configure evcc">
+    Add the token as `password` in your `evcc.yaml`. The `user` field is not used for v2 token auth but must be present:
+
+    ```yaml
+    influx:
+      url: http://localhost:8086
+      database: evcc          # bucket name in v2
+      user: evcc              # any non-empty value
+      password: your-api-token
+    ```
+  </Step>
+  <Step title="Restart evcc">
+    Restart evcc and verify data is flowing by querying the bucket in the InfluxDB Data Explorer.
+  </Step>
+</Steps>
+
+---
+
+## What data is exported
+
+evcc writes every parameter from its internal state pipeline to InfluxDB. Each parameter becomes a separate **measurement** (series key) with a `value` field.
+
+### Site-level measurements
+
+| Measurement | Description | Unit |
+|---|---|---|
+| `gridPower` | Power imported from or exported to the grid | W |
+| `pvPower` | Total PV generation | W |
+| `homePower` | Household consumption (excluding EV charging) | W |
+| `batteryPower` | Battery charge (positive) or discharge (negative) | W |
+| `batterySoc` | Home battery state of charge | % |
+| `prioritySoc` | Battery priority SoC threshold | % |
+| `bufferSoc` | Battery buffer SoC | % |
+
+### Loadpoint measurements
+
+Loadpoint measurements include `loadpoint` and (when available) `vehicle` tags for filtering.
+
+| Measurement | Description | Unit |
+|---|---|---|
+| `chargePower` | Current charging power | W |
+| `chargedEnergy` | Energy added in current session | kWh |
+| `chargeDuration` | Duration of current charging session | s |
+| `vehicleSoc` | Vehicle state of charge | % |
+| `limitSoc` | Configured SoC limit | % |
+| `mode` | Charge mode string (`off`, `now`, `minpv`, `pv`) | — |
+| `enabled` | Whether charging is enabled | bool |
+| `connected` | Whether a vehicle is connected | bool |
+| `charging` | Whether the vehicle is actively charging | bool |
+| `minCurrent` | Minimum charge current | A |
+| `maxCurrent` | Maximum charge current | A |
+| `phasesActive` | Number of active phases | — |
+
+### Tags
+
+Every point written by a loadpoint carries two tags:
+
+| Tag | Description |
+|---|---|
+| `loadpoint` | Title of the loadpoint (from `evcc.yaml` `title:` field) |
+| `vehicle` | Title of the connected vehicle (when available) |
+
+These tags let you filter Grafana panels by loadpoint or vehicle without separate queries.
+
+---
+
+## Grafana setup
+
+<Steps>
+  <Step title="Add InfluxDB as a data source">
+    In Grafana, go to **Connections → Data Sources → Add data source** and select **InfluxDB**.
+
+    For InfluxDB v1:
+    - **URL**: `http://localhost:8086`
+    - **Database**: `evcc`
+    - **User / Password**: your InfluxDB credentials
+
+    For InfluxDB v2 with the Flux query language:
+    - **Query Language**: Flux
+    - **URL**: your InfluxDB URL
+    - **Token**: your API token
+    - **Organization** and **Bucket**: as configured
+  </Step>
+  <Step title="Create a dashboard">
+    Click **Dashboards → New → New Dashboard**, then add panels using the queries below as a starting point.
+  </Step>
+  <Step title="Add a power flow panel">
+    Use this InfluxQL query to visualize grid and PV power over time:
+
+    ```sql
+    SELECT mean("value") FROM "gridPower", "pvPower", "homePower"
+    WHERE $timeFilter
+    GROUP BY time($__interval) fill(null)
+    ```
+  </Step>
+  <Step title="Add a vehicle SoC panel">
+    Filter by loadpoint tag to show SoC for a specific charger:
+
+    ```sql
+    SELECT mean("value") FROM "vehicleSoc"
+    WHERE "loadpoint" = 'Garage' AND $timeFilter
+    GROUP BY time($__interval) fill(null)
+    ```
+  </Step>
+</Steps>
+
+### Example Flux query (InfluxDB v2)
+
+```flux
+from(bucket: "evcc")
+  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+  |> filter(fn: (r) => r["_measurement"] == "gridPower" or r["_measurement"] == "pvPower")
+  |> filter(fn: (r) => r["_field"] == "value")
+  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)
+  |> yield(name: "mean")
+```
+
+---
+
+## Community dashboards
+
+The evcc community has published ready-made Grafana dashboards. Search for **evcc** on [Grafana's dashboard marketplace](https://grafana.com/grafana/dashboards/) or the [evcc GitHub discussions](https://github.com/evcc-io/evcc/discussions) to find dashboards you can import directly.
+
+<Tip>
+Import a community dashboard by going to **Dashboards → New → Import** in Grafana and pasting the dashboard ID or JSON.
+</Tip>

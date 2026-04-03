@@ -1,0 +1,229 @@
+---
+title: "Sessions"
+description: "Retrieve, filter, export, update, and delete charging session records."
+---
+
+evcc records each charging session to a local SQLite database. You can query sessions by date, export them as CSV, update the vehicle or loadpoint label on a session, or delete individual records.
+
+Read endpoints are unauthenticated. Write endpoints require an authenticated session. See [Authentication](/api/auth).
+
+---
+
+## GET /api/sessions
+
+Return a list of charging sessions. Sessions with less than 0.05 kWh charged are excluded.
+
+### Query parameters
+
+<ParamField query="year" type="integer">
+  Filter sessions to a specific year (e.g. `2025`).
+</ParamField>
+
+<ParamField query="month" type="integer">
+  Filter sessions to a specific month (1–12). Only applies when `year` is also set.
+</ParamField>
+
+<ParamField query="format" type="string">
+  Response format. Omit for JSON. Pass `csv` to download a CSV file.
+</ParamField>
+
+<ParamField query="lang" type="string">
+  Language code for CSV column headers (e.g. `de`, `en`). Defaults to the `Accept-Language` request header.
+</ParamField>
+
+### Response
+
+<ResponseField name="result" type="array">
+  Array of charging session objects.
+  <Expandable title="Session fields">
+    <ResponseField name="id" type="integer">
+      Unique session identifier.
+    </ResponseField>
+    <ResponseField name="created" type="string">
+      Session start time in RFC 3339 format.
+    </ResponseField>
+    <ResponseField name="finished" type="string">
+      Session end time in RFC 3339 format.
+    </ResponseField>
+    <ResponseField name="loadpoint" type="string">
+      Name of the loadpoint where charging took place.
+    </ResponseField>
+    <ResponseField name="vehicle" type="string">
+      Name of the vehicle that was charged (if known).
+    </ResponseField>
+    <ResponseField name="odometer" type="number">
+      Vehicle odometer reading in kilometers at session end. `null` if not available.
+    </ResponseField>
+    <ResponseField name="meterStart" type="number">
+      Meter reading at the start of the session (kWh). `null` if not recorded.
+    </ResponseField>
+    <ResponseField name="meterStop" type="number">
+      Meter reading at the end of the session (kWh). `null` if not recorded.
+    </ResponseField>
+    <ResponseField name="chargedEnergy" type="number">
+      Total energy delivered in this session in kWh.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Examples
+
+**Get all sessions:**
+
+```bash
+curl http://evcc.local:7070/api/sessions
+```
+
+```json
+{
+  "result": [
+    {
+      "id": 42,
+      "created": "2025-07-19T18:30:00Z",
+      "finished": "2025-07-19T22:15:00Z",
+      "loadpoint": "Garage",
+      "vehicle": "vehicle_1",
+      "odometer": 24150.3,
+      "meterStart": 1234.5,
+      "meterStop": 1249.8,
+      "chargedEnergy": 15.3
+    }
+  ]
+}
+```
+
+**Filter by year and month:**
+
+```bash
+curl "http://evcc.local:7070/api/sessions?year=2025&month=7"
+```
+
+**Download as CSV:**
+
+```bash
+curl -o sessions-2025-07.csv \
+  "http://evcc.local:7070/api/sessions?year=2025&month=7&format=csv"
+```
+
+The CSV filename is `session-{year}-{month}.csv` when month and year filters are applied, or `session.csv` otherwise.
+
+---
+
+## PUT /api/session/\{id\}
+
+Update the vehicle or loadpoint label on a charging session. Useful for correcting sessions where the vehicle was not detected automatically.
+
+<ParamField path="id" type="integer" required>
+  The session ID to update.
+</ParamField>
+
+### Request body
+
+<ParamField body="vehicle" type="string">
+  Vehicle name to associate with this session. Must be a configured vehicle name.
+</ParamField>
+
+<ParamField body="loadpoint" type="string">
+  Loadpoint name to associate with this session.
+</ParamField>
+
+At least one of `vehicle` or `loadpoint` must be provided.
+
+### Example
+
+```bash
+curl -b cookies.txt -X PUT \
+  http://evcc.local:7070/api/session/42 \
+  -H "Content-Type: application/json" \
+  -d '{"vehicle": "vehicle_1"}'
+```
+
+HTTP 200 with empty body on success.
+
+---
+
+## DELETE /api/session/\{id\}
+
+Delete a charging session record permanently.
+
+<ParamField path="id" type="integer" required>
+  The session ID to delete.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="null">
+  Always `null`.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X DELETE \
+  http://evcc.local:7070/api/session/42
+```
+
+```json
+{ "result": null }
+```
+
+<Warning>
+  Deletion is permanent. There is no undo.
+</Warning>
+
+---
+
+## GET /api/gridsessions
+
+Return a list of HEMS grid limitation events. These are recorded when a grid operator or HEMS system limits the site's grid power.
+
+### Query parameters
+
+<ParamField query="format" type="string">
+  Response format. Omit for JSON. Pass `csv` to download a CSV file.
+</ParamField>
+
+<ParamField query="lang" type="string">
+  Language code for CSV column headers. Defaults to the `Accept-Language` request header.
+</ParamField>
+
+### Response
+
+<ResponseField name="result" type="array">
+  Array of grid limitation session objects.
+  <Expandable title="Grid session fields">
+    <ResponseField name="id" type="integer">Unique record identifier.</ResponseField>
+    <ResponseField name="created" type="string">Start time of the limitation event in RFC 3339 format.</ResponseField>
+    <ResponseField name="finished" type="string">End time of the limitation event in RFC 3339 format.</ResponseField>
+    <ResponseField name="type" type="string">`consumption` or `feedin` — the type of limitation applied.</ResponseField>
+    <ResponseField name="gridPower" type="number">Actual grid power in watts during the event.</ResponseField>
+    <ResponseField name="limitPower" type="number">Grid power limit in watts imposed by the HEMS.</ResponseField>
+    <ResponseField name="chargeDuration" type="number">Duration of active EV charging during this event in seconds.</ResponseField>
+    <ResponseField name="solarPercentage" type="number">Percentage of energy delivered from solar during this event.</ResponseField>
+    <ResponseField name="price" type="number">Total energy cost during this event.</ResponseField>
+    <ResponseField name="pricePerKWh" type="number">Average price per kWh during this event.</ResponseField>
+    <ResponseField name="co2PerKWh" type="number">Average CO₂ emissions per kWh during this event.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash
+curl http://evcc.local:7070/api/gridsessions
+```
+
+```json
+{
+  "result": [
+    {
+      "id": 5,
+      "created": "2025-07-19T13:00:00Z",
+      "finished": "2025-07-19T14:30:00Z",
+      "type": "feedin",
+      "gridPower": 3500,
+      "limitPower": 3700,
+      "chargeDuration": 2400,
+      "solarPercentage": 82.5,
+      "price": 1.23,
+      "pricePerKWh": 0.14,
+      "co2PerKWh": 95
+    }
+  ]
+}
+```

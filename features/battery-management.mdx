@@ -1,0 +1,193 @@
+---
+title: "Battery management"
+description: "evcc coordinates EV charging with your home battery to protect battery reserves, enable battery-assisted charging, and prevent unwanted discharge."
+---
+
+When you have a home battery, evcc integrates it into its charging decisions. It can protect a minimum battery reserve for household use, allow the battery to supplement solar charging, prevent discharging during fast EV charging, and accept external commands to charge the battery from the grid.
+
+## Battery modes
+
+evcc operates the home battery in one of three modes, defined in `api/batterymode.go`:
+
+| Mode | Value | Description |
+|------|-------|-------------|
+| `normal` | `BatteryNormal` | Default mode — battery charges from solar surplus and discharges to cover household loads. |
+| `hold` | `BatteryHold` | Battery neither charges nor discharges. Locks the current state of charge. |
+| `charge` | `BatteryCharge` | Battery charges from the grid, up to the configured maximum SoC limit. |
+
+evcc switches the battery mode automatically based on site conditions. You can also control it externally via the API.
+
+## Buffer SoC
+
+The **buffer SoC** tells evcc above which battery state of charge it should allow the battery to contribute to EV charging. Below the buffer SoC, the battery is treated as unavailable and EV charging is restricted to solar surplus only.
+
+From `core/site.go`:
+
+```go
+// if battery is above bufferSoc allow using it for charging
+batteryBuffered = site.bufferSoc > 0 && site.battery.Soc > site.bufferSoc
+```
+
+Set the buffer SoC via the API:
+
+```bash
+# Protect 20% of battery capacity — only use battery above 20% SoC for EV charging
+POST /api/buffersoc/20
+
+# Remove the buffer SoC (use battery freely)
+POST /api/buffersoc/0
+```
+
+### Buffer start SoC
+
+The **buffer start SoC** is a separate threshold that controls when EV charging can *begin* using battery power. This allows you to require a higher minimum battery level before battery-assisted EV charging starts:
+
+```bash
+# Only start battery-assisted EV charging once battery is at 60% or above
+POST /api/bufferstartsoc/60
+```
+
+Together, these two settings let you say: "Start using the battery for EV charging only when it's at 60%, and stop using it once it drops to 20%."
+
+## Battery boost
+
+Battery boost allows the home battery to actively supplement EV charging beyond what solar alone provides. When boost is active, evcc draws extra power from the battery to increase the charge current.
+
+Boost is activated per-loadpoint:
+
+```bash
+# Enable battery boost
+POST /api/loadpoints/1/batteryboost/true
+
+# Disable battery boost
+POST /api/loadpoints/1/batteryboost/false
+```
+
+You can also set a **boost limit** — the battery SoC at which boost automatically deactivates:
+
+```bash
+# Stop battery boost when battery drops below 30% SoC
+POST /api/loadpoints/1/batteryboostlimit/30
+```
+
+The `batteryBoostLimit` defaults to 100 (disabled). Set it to a value between 0 and 99 to protect a minimum battery reserve when boost is active.
+
+Internally, boost is a three-state machine (`boostDisabled = 0`, `boostStart = 1`, `boostContinue = 2`) that resets when the charging mode changes.
+
+## Discharge prevention during fast and smart cost charging
+
+When a loadpoint is charging in **Now** mode or has **smart cost charging** active, evcc can optionally prevent the home battery from discharging. This ensures grid power (which is already cheap or available at full power) goes directly to the EV without the battery depleting unnecessarily.
+
+Enable discharge control at the site level:
+
+```bash
+# Prevent battery discharge during fast/smart cost charging
+POST /api/batterydischargecontrol/true
+
+# Allow normal battery discharge behavior
+POST /api/batterydischargecontrol/false
+```
+
+The logic in `core/site_battery.go`:
+
+```go
+func (site *Site) dischargeControlActive(rate api.Rate) bool {
+    if !site.GetBatteryDischargeControl() {
+        return false
+    }
+    for _, lp := range site.Loadpoints() {
+        smartCostActive := site.smartCostActive(lp, rate)
+        if lp.GetStatus() == api.StatusC && (smartCostActive || lp.IsFastChargingActive()) {
+            return true
+        }
+    }
+    return false
+}
+```
+
+When discharge control is active, evcc puts the battery into **hold** mode. If the circuit is also dimmed (overload protection active), hold mode is applied even during grid-charging operations.
+
+## Battery grid charging
+
+evcc can charge the home battery from the grid when the electricity price is below a configured threshold. This is useful with dynamic tariffs — fill the battery when prices are low, then use it during expensive hours.
+
+```bash
+# Charge battery from grid when price is ≤ 0.10 EUR/kWh
+POST /api/batterygridchargelimit/0.10
+
+# Remove the grid charge limit
+DELETE /api/batterygridchargelimit
+```
+
+When the grid charge limit is active and the current tariff rate falls below it, evcc switches the battery to **charge** mode. When the rate rises above the limit, the battery returns to normal mode.
+
+<Note>
+  Battery grid charging requires a battery inverter that supports the `BatteryController` capability — meaning evcc can command it to charge from the grid. Check your inverter's template documentation to confirm support.
+</Note>
+
+### Maximum SoC during grid charging
+
+If your battery inverter or battery management system has a configured maximum SoC limit, evcc respects it. When the battery reaches the maximum SoC, evcc switches it to **hold** mode automatically:
+
+```go
+// from core/site_battery.go
+// put battery into hold mode when soc limit reached
+if ok {
+    mode = api.BatteryHold
+}
+```
+
+## External battery mode control
+
+You can override the battery mode directly from an external system — for example, a home automation rule — using the API:
+
+```bash
+# Force battery to hold (stop charging and discharging)
+POST /api/batterymode/hold
+
+# Force battery to charge from grid
+POST /api/batterymode/charge
+
+# Return battery to normal automatic control
+POST /api/batterymode/normal
+
+# Remove external override (return to evcc automatic control)
+DELETE /api/batterymode
+```
+
+External mode overrides take priority over evcc's automatic logic. When you delete the external override, evcc's next update cycle applies the appropriate mode based on current site conditions.
+
+## YAML configuration summary
+
+Battery-related settings belong in the `site` section:
+
+```yaml evcc.yaml
+site:
+  title: Home
+  meters:
+    grid: grid
+    pv:
+      - pv
+    battery:
+      - battery   # one or more battery meters
+  residualPower: 0
+```
+
+Buffer SoC and battery grid charge settings are runtime values — set them via the UI or API and they are persisted in evcc's database. They do not go in `evcc.yaml`.
+
+<Tip>
+  If you have multiple battery units, list all of them under `site.meters.battery`. evcc applies the configured battery mode to each unit that implements the `BatteryController` interface. Units without that capability are used for measurement only.
+</Tip>
+
+## Interaction with circuit protection
+
+When an electrical circuit is in a dimmed state (overload protection active), evcc overrides battery charging mode to **hold** even if grid charging was requested. This prevents exceeding the circuit's capacity limit:
+
+```go
+// from core/site_battery.go
+// put battery into hold mode when charging is active and circuit dimmed
+fromToCharge := batteryMode == api.BatteryCharge || ...
+if fromToCharge && circuitDimmed(site.circuit) {
+    batteryMode = api.BatteryHold
+}
+```

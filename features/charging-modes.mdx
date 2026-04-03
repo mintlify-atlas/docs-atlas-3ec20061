@@ -1,0 +1,166 @@
+---
+title: "Charging modes"
+description: "evcc supports four charging modes that control when and how fast your EV charges. Switch between them at any time from the UI or the REST API."
+---
+
+Each loadpoint operates in exactly one charging mode at a time. The mode determines whether evcc charges immediately, waits for solar surplus, or stays off. You can switch modes at any time from the web UI or via the REST API.
+
+## The four modes
+
+<CardGroup cols={2}>
+  <Card title="Off" icon="power-off">
+    Charging is disabled. The charger is powered but no current flows. Useful when the car is plugged in but should not charge.
+  </Card>
+  <Card title="Now (fast)" icon="bolt">
+    Charge at maximum available power immediately, regardless of solar production or electricity prices.
+  </Card>
+  <Card title="Min+PV" icon="sun">
+    Charge at a minimum guaranteed rate, then use any available solar surplus on top. The car always charges at least at the minimum current.
+  </Card>
+  <Card title="PV" icon="solar-panel">
+    Charge only when solar surplus is available. Charging pauses automatically when surplus drops below the minimum charge current threshold.
+  </Card>
+</CardGroup>
+
+## Mode details
+
+### Off
+
+When set to **Off**, evcc signals the charger to stop charging. The vehicle remains connected and the charger stays powered, but no current is delivered. Existing charge sessions are stopped cleanly.
+
+This mode is the recommended default for publicly accessible chargers, as set by the `mode: "off"` default in `evcc.yaml`:
+
+```yaml evcc.yaml
+loadpoints:
+  - title: Garage
+    charger: wallbe
+    mode: "off"  # stop charging when vehicle disconnects
+```
+
+### Now
+
+**Now** mode charges at the maximum current the charger and vehicle allow. evcc does not consider solar production or electricity prices — it simply charges as fast as possible.
+
+evcc respects the `maxCurrent` limit configured for the loadpoint and any per-vehicle limits set via `onIdentify`.
+
+### Min+PV
+
+**Min+PV** mode combines a guaranteed minimum rate with solar surplus charging:
+
+1. evcc always charges at least at `minCurrent` (default: 6 A), even if there is no solar surplus. This draws from the grid if needed.
+2. Any available solar surplus above the minimum is used to increase the charge current, up to `maxCurrent`.
+3. The charge current adjusts dynamically as solar production changes.
+
+This mode ensures the vehicle always makes charging progress while still using solar energy when it is available.
+
+### PV
+
+**PV** mode is purely solar-driven:
+
+- Charging starts only when solar surplus exceeds the power needed for the minimum charge current.
+- The charge current tracks the available surplus in real time.
+- Charging pauses when surplus drops below the minimum threshold (after the configured disable delay).
+- Charging resumes when surplus returns (after the configured enable delay).
+
+The enable and disable delays prevent rapid switching when solar production fluctuates:
+
+```yaml evcc.yaml
+loadpoints:
+  - title: Garage
+    charger: wallbe
+    enable:
+      delay: 1m       # surplus must exceed threshold for 1 minute before starting
+      threshold: 0    # W — negative value means export must exceed minimum charge power
+    disable:
+      delay: 3m       # surplus must drop below threshold for 3 minutes before pausing
+      threshold: 0    # W — maximum allowed grid import while charging
+```
+
+<Note>
+  Setting `enable.threshold` to a positive value (for example `200`) means evcc will start charging even when consuming that amount of power from the grid. A negative value (for example `-1380`) requires that much power to be exported before charging starts.
+</Note>
+
+## Switching modes
+
+### From the UI
+
+Select a mode using the mode buttons at the top of each loadpoint card on the main dashboard. The change takes effect immediately.
+
+### Via the REST API
+
+```bash
+# Set mode to PV (solar only)
+POST /api/loadpoints/{id}/mode/pv
+
+# Set mode to Min+PV
+POST /api/loadpoints/{id}/mode/minpv
+
+# Set mode to Now (fast charge)
+POST /api/loadpoints/{id}/mode/now
+
+# Set mode to Off
+POST /api/loadpoints/{id}/mode/off
+```
+
+Valid mode values: `off`, `now`, `minpv`, `pv`.
+
+**Example with curl:**
+
+```bash
+curl -X POST http://evcc:7070/api/loadpoints/1/mode/pv
+```
+
+The API returns the updated loadpoint state as JSON.
+
+## Mode persistence
+
+evcc persists the selected mode to its database, so it survives restarts. When a vehicle disconnects, the loadpoint reverts to the `DefaultMode` configured in `evcc.yaml` (or `off` if not set):
+
+```yaml evcc.yaml
+loadpoints:
+  - title: Garage
+    charger: wallbe
+    mode: "off"   # restored after each vehicle disconnect
+```
+
+If you change the mode via the UI or API, that overrides the YAML default until the vehicle disconnects again.
+
+## Auto-mode on vehicle identification (`onIdentify`)
+
+You can configure a mode that activates automatically whenever a specific vehicle is identified:
+
+```yaml evcc.yaml
+vehicles:
+  - name: car1
+    type: renault
+    title: Zoe
+    capacity: 60
+    user: myuser
+    password: mypassword
+    vin: WREN...
+    onIdentify:
+      mode: pv         # switch to PV mode when this vehicle is detected
+      minCurrent: 8    # optional: override minimum current for this vehicle
+      maxCurrent: 16   # optional: override maximum current for this vehicle
+      priority: 1      # optional: override loadpoint priority
+```
+
+The `onIdentify` action fires each time evcc identifies the vehicle (on connect or after a polling update). The supported fields are:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mode` | string | Charge mode to apply (`off`, `now`, `minpv`, `pv`) |
+| `minCurrent` | float | Minimum charge current in amperes |
+| `maxCurrent` | float | Maximum charge current in amperes |
+| `maxPower` | float | Maximum charge power in watts |
+| `priority` | int | Loadpoint priority for multi-charger coordination |
+
+<Tip>
+  Use `onIdentify` to automatically apply the right charging behavior per vehicle. For example, give a work car `mode: now` for fast charging and a second car `mode: pv` for solar-only top-ups.
+</Tip>
+
+## Mode interaction with charging plans
+
+When a [charging plan](/features/energy-planning) is active, the plan may override the current mode temporarily to meet the departure-time goal. Once the plan finishes, the loadpoint returns to the active mode.
+
+Smart cost charging (charging when the electricity price is below a threshold) also interacts with modes: it activates regardless of the current PV mode and charges at full power during cheap price windows.

@@ -1,0 +1,229 @@
+---
+title: "Smart charging"
+description: "evcc dynamically adjusts charge power based on solar surplus, electricity prices, and feed-in limits to minimize energy costs while maximizing self-consumption."
+---
+
+Smart charging in evcc covers two distinct capabilities: **PV surplus control** (adjusting charge power based on real-time solar production) and **smart cost charging** (charging during cheap or green electricity windows). Both work alongside the standard [charging modes](/features/charging-modes) and can be used independently.
+
+## PV surplus detection
+
+evcc continuously calculates available solar surplus based on real-time meter readings:
+
+```text
+available surplus = PV generation − home consumption − existing charge power
+```
+
+The grid meter reading is the primary signal. A negative grid reading (export) means surplus is available. A positive reading (import) means the home is consuming more than the PV system produces.
+
+evcc reads all configured meters — grid, PV, battery, and auxiliary — every control cycle (default: 30 seconds) and uses the combined picture to decide how much power to offer the charger.
+
+### What counts as surplus
+
+evcc sums all PV inputs and subtracts all loads except the current charge session:
+
+- **PV meters** — total solar generation
+- **Battery discharge** — when the home battery discharges, its output appears as negative load and increases apparent surplus
+- **Auxiliary meters** (`aux`) — devices listed as auxiliary meters adjust the grid operating point; their consumption reduces available surplus
+
+### Buffer SoC and battery interaction
+
+When a home battery is configured, evcc uses the battery state to decide whether to allow or restrict charging from battery power. See [Battery management](/features/battery-management) for details.
+
+## Enable and disable thresholds
+
+evcc uses two configurable thresholds with hysteresis timers to prevent rapid start/stop cycling in PV and Min+PV modes:
+
+```yaml evcc.yaml
+loadpoints:
+  - title: Garage
+    charger: wallbe
+    enable:
+      delay: 1m       # how long surplus must exceed threshold before enabling
+      threshold: 0    # W — grid power threshold for enabling charging
+    disable:
+      delay: 3m       # how long surplus must drop before disabling
+      threshold: 0    # W — grid import threshold for disabling
+```
+
+### Threshold interpretation
+
+| `enable.threshold` | Behavior |
+|--------------------|----------|
+| `0` (default) | Start charging when solar surplus covers the minimum charge power |
+| `-1380` | Start only when exporting at least 1380 W to the grid (6 A × 230 V) |
+| `500` | Start even if importing up to 500 W from the grid |
+
+| `disable.threshold` | Behavior |
+|---------------------|----------|
+| `0` (default) | Stop when any grid import occurs during charging |
+| `200` | Tolerate up to 200 W of grid import before stopping |
+
+<Warning>
+  Setting `enable.threshold` to a positive value means evcc accepts some grid consumption to start charging. This can increase your electricity bill if solar production does not subsequently cover the load.
+</Warning>
+
+The defaults are:
+- Enable delay: **1 minute**
+- Disable delay: **3 minutes**
+
+These are set in `loadpoint.go`:
+```go
+Enable:  loadpoint.ThresholdConfig{Delay: time.Minute, Threshold: 0},
+Disable: loadpoint.ThresholdConfig{Delay: 3 * time.Minute, Threshold: 0},
+```
+
+## Minimum and maximum current
+
+The charge current in PV-based modes is bounded by two limits:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `minCurrent` | 6 A | Minimum charge current. In PV mode, charging pauses if surplus cannot sustain this. In Min+PV mode, this current is guaranteed from the grid. |
+| `maxCurrent` | 16 A | Maximum allowed charge current, enforced by evcc and the charger. |
+
+These are now configured via the UI rather than `evcc.yaml` directly (the YAML fields `minCurrent` and `maxCurrent` are deprecated). You can also set them per-vehicle using `onIdentify`:
+
+```yaml evcc.yaml
+vehicles:
+  - name: car1
+    type: volkswagen
+    onIdentify:
+      minCurrent: 8    # A
+      maxCurrent: 16   # A
+```
+
+## Phase switching (1-phase / 3-phase)
+
+Chargers that support automatic phase switching (1p3p) can reduce the minimum charge power significantly. A 1-phase connection at 6 A draws about 1.4 kW, while a 3-phase connection at 6 A draws about 4.1 kW.
+
+evcc switches phases automatically when:
+
+- **Scale to 1-phase**: surplus drops below what 3-phase charging requires, but 1-phase would be sustainable
+- **Scale to 3-phase**: surplus grows enough to support 3-phase charging at the minimum current
+
+Phase switching has a built-in guard period (`phaseSwitchDuration`) of 60 seconds to avoid rapid toggling. A 60-second charger switch guard (`chargerSwitchDuration`) is also applied after enabling or disabling the charger.
+
+The number of configured phases is set in the UI. You can also query active phases via the API:
+
+```bash
+# Get current loadpoint state (includes phasesActive, phasesConfigured)
+GET /api/loadpoints/1
+```
+
+<Tip>
+  Phase switching requires a charger that supports it (such as go-e Charger, Easee, or OCPP chargers with phase control). Check your charger's template documentation to see if it supports 1p3p switching.
+</Tip>
+
+## Smart cost charging
+
+Smart cost charging lets evcc charge automatically whenever the current electricity price falls below a threshold you set — regardless of the current charging mode. This is useful with dynamic tariffs (Tibber, Octopus, aWATTar, Awattar, etc.).
+
+### How it works
+
+evcc checks the current rate from the configured grid tariff. If the rate is at or below the smart cost limit, it activates charging at full power:
+
+```go
+// from core/loadpoint_smartcost.go
+func (lp *Loadpoint) smartLimitActive(limit *float64, rates api.Rates, checkBelow bool) bool {
+    rate, err := rates.At(time.Now())
+    if err != nil || limit == nil {
+        return false
+    }
+    if checkBelow {
+        return rate.Value <= *limit
+    }
+    return rate.Value >= *limit
+}
+```
+
+When the price rises above the threshold again, smart cost charging stops.
+
+### Setting the smart cost limit
+
+You can set the limit per-loadpoint via the API:
+
+```bash
+# Charge whenever price is ≤ 0.15 EUR/kWh
+POST /api/loadpoints/1/smartcostlimit/0.15
+
+# Remove the smart cost limit
+DELETE /api/loadpoints/1/smartcostlimit
+```
+
+You can also set a site-wide smart cost limit that applies to all loadpoints simultaneously:
+
+```bash
+# Site-wide limit
+POST /api/smartcostlimit/0.15
+
+# Remove site-wide limit
+DELETE /api/smartcostlimit
+```
+
+### Feed-in priority limit
+
+The complementary `smartFeedInPriorityLimit` prevents charging when the feed-in rate is above a threshold. This is useful when it is more profitable to export solar power to the grid than to charge the car:
+
+```bash
+# Suppress charging if feed-in rate is ≥ 0.30 EUR/kWh
+POST /api/loadpoints/1/smartfeedinprioritylimit/0.30
+
+# Remove the limit
+DELETE /api/loadpoints/1/smartfeedinprioritylimit
+```
+
+### Configuring dynamic tariffs
+
+Smart cost charging requires a dynamic tariff source. Configure it in `evcc.yaml` under `tariffs`:
+
+<CodeGroup>
+
+```yaml Tibber
+tariffs:
+  currency: EUR
+  grid:
+    type: template
+    template: tibber
+    token: <your-api-token>
+```
+
+```yaml aWATTar
+tariffs:
+  currency: EUR
+  grid:
+    type: template
+    template: awattar
+    region: de   # de or at
+```
+
+```yaml Fixed zones
+tariffs:
+  currency: EUR
+  grid:
+    type: fixed
+    price: 0.294
+    zones:
+      - days: Mon-Fri
+        hours: 2-5
+        price: 0.20
+      - days: Sat,Sun
+        price: 0.15
+```
+
+</CodeGroup>
+
+## Battery discharge control
+
+When fast charging (`Now` mode) or smart cost charging is active, evcc can prevent the home battery from discharging to power EV charging. This keeps the home battery available for household use during expensive grid periods.
+
+Enable discharge control at the site level:
+
+```bash
+# Enable battery discharge prevention
+POST /api/batterydischargecontrol/true
+
+# Disable it
+POST /api/batterydischargecontrol/false
+```
+
+When discharge control is active and a loadpoint is fast-charging or smart-cost charging, the battery is put into **hold** mode — it neither charges nor discharges. See [Battery management](/features/battery-management) for the full battery coordination logic.

@@ -1,0 +1,87 @@
+---
+title: "Introduction"
+description: "evcc is an open-source EV charge controller and home energy management system that maximizes solar-powered EV charging — locally, without cloud dependencies."
+keywords: ["evcc", "ev charging", "solar charging", "home energy management", "hems", "open source"]
+---
+
+evcc connects your EV charger, solar inverter, home battery, and energy meters to intelligently charge your vehicle using surplus solar power. It runs entirely on your local network — no cloud account required, no subscription fees for core features.
+
+## What evcc does
+
+evcc sits between your energy devices and makes charging decisions based on real-time data:
+
+- **Solar surplus charging** — charge your EV only when your solar system produces more energy than your home consumes
+- **Mixed-mode charging** — combine solar surplus with grid power to guarantee a minimum charge rate
+- **Cost-optimized charging** — schedule charging based on dynamic electricity tariffs (Tibber, Octopus, aWATTar, and more)
+- **CO₂-optimized charging** — time charging to minimize carbon intensity using grid forecast data
+- **Target charging** — set a departure time and desired state of charge; evcc plans the cheapest or greenest charging window automatically
+
+## Architecture
+
+evcc models your home energy setup as a set of connected components:
+
+| Component | Description |
+|-----------|-------------|
+| **Site** | The top-level container. Holds all meters and coordinates loadpoints. |
+| **Loadpoint** | A single charging point. Connects one charger (and optionally a meter) to a vehicle. You can have multiple loadpoints. |
+| **Meter** | An energy measurement device. Roles include `grid` (import/export), `pv` (solar generation), `battery` (home battery), and `charge` (charge meter at the loadpoint). |
+| **Charger** | The physical EV charging device (wallbox). evcc controls its on/off state and current. |
+| **Vehicle** | An EV integration that provides state of charge data and supports remote charging control. |
+| **Tariff** | A grid pricing or CO₂ forecast integration used for smart scheduling. |
+
+A minimal setup requires at least a grid meter and one loadpoint with a charger. Solar inverter and vehicle integrations are optional but unlock the most value.
+
+## Supported devices
+
+evcc supports a large and growing device ecosystem:
+
+- **200+ EV chargers** — including OCPP and EEBus chargers, as well as smart switches for dumb chargers
+- **100+ solar inverters and battery systems** — from Fronius, SMA, Huawei, Growatt, Victron, and many others
+- **30+ vehicle brands** — Volkswagen, Tesla, BMW, Renault, Hyundai, Kia, Mercedes-Benz, and more
+- **Modbus, HTTP, MQTT, and JavaScript plugins** — integrate any device not covered by built-in templates
+
+See the [evcc device documentation](https://docs.evcc.io/en/docs/devices/chargers) for the full list.
+
+## Charging modes
+
+Each loadpoint operates in one of four charging modes, switchable at any time from the UI or API:
+
+| Mode | Behavior |
+|------|----------|
+| **Off** | Charging is disabled. |
+| **Now** | Charge at maximum available power regardless of solar production. |
+| **Min+PV** | Charge at a configurable minimum rate; use additional solar surplus on top. |
+| **PV** | Charge only when solar surplus exceeds the minimum charge current. Pauses automatically when surplus drops. |
+
+## Integrations
+
+evcc publishes state to a [REST API](/integrations/rest-api) and [MQTT](/integrations/mqtt), making it easy to connect to home automation platforms:
+
+- **Home Assistant** — official add-on available
+- **InfluxDB + Grafana** — built-in data export for energy dashboards
+- **Push notifications** — Telegram, Pushover, ntfy, email, and others via a configurable messaging system
+
+## Sponsorship
+
+evcc is open source under the MIT License. Some features — primarily certain vehicle manufacturer APIs that require ongoing reverse-engineering and maintenance effort — require a **sponsor token**. Tokens are available at [sponsor.evcc.io](https://sponsor.evcc.io).
+
+<Note>
+  The sponsor token requirement applies per evcc instance. The rest of evcc, including all charger integrations, solar inverter support, and core energy management, is free to use.
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install evcc via Docker, apt/rpm package, Homebrew, or binary.
+  </Card>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Run the configuration wizard and start your first charge session.
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/configuration/overview">
+    Configure meters, chargers, vehicles, and tariffs in `evcc.yaml`.
+  </Card>
+  <Card title="Integrations" icon="plug" href="/integrations/rest-api">
+    Connect evcc to Home Assistant, InfluxDB, and your own systems.
+  </Card>
+</CardGroup>

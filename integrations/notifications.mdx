@@ -1,0 +1,267 @@
+---
+title: "Notifications"
+description: "Send push notifications and messages when charging events occur in evcc."
+---
+
+evcc can send push notifications when charging events happen — a vehicle connects or disconnects, charging starts or finishes, the vehicle battery reaches a certain SoC, and more. You configure the events and their message templates once, then attach one or more notification services.
+
+## Configuration
+
+Add a `messaging` block to your `evcc.yaml`:
+
+```yaml
+messaging:
+  events:
+    start:
+      title: Charge started
+      msg: Started charging in "${mode}" mode
+    stop:
+      title: Charge finished
+      msg: Finished charging ${chargedEnergy:%.1fk}kWh in ${chargeDuration}.
+    connect:
+      title: Car connected
+      msg: "Car connected at ${pvPower:%.1fk}kW PV"
+    disconnect:
+      title: Car disconnected
+      msg: Car disconnected after ${connectedDuration}
+    soc:
+      title: Soc updated
+      msg: Battery charged to ${vehicleSoc:%.0f}%
+    guest:
+      title: Unknown vehicle
+      msg: Unknown vehicle, guest connected?
+    asleep:
+      title: Vehicle asleep
+      msg: Charge release, vehicle {{ if .vehicleTitle }}{{ .vehicleTitle }} {{ end }}not charging.
+    planoverrun:
+      title: Plan overrun
+      msg: "Plan {{- if .vehicleTitle }} for {{ .vehicleTitle }} will overrun.{{ else }} will overrun.{{ end }}"
+  services:
+    - type: telegram
+      token: your-bot-token
+      chats:
+        - 123456789
+```
+
+---
+
+## Events
+
+Each key under `events` corresponds to a charging event. You can customize the `title` and `msg` for each one, or disable an event entirely by setting `disabled: true`.
+
+| Event | Triggered when |
+|---|---|
+| `start` | A vehicle starts charging |
+| `stop` | Charging stops (vehicle full or manually stopped) |
+| `connect` | A vehicle is plugged in to a loadpoint |
+| `disconnect` | A vehicle is unplugged from a loadpoint |
+| `soc` | The vehicle's SoC is updated from the vehicle API |
+| `guest` | A connected vehicle could not be identified |
+| `asleep` | A vehicle is connected but not charging (may be asleep) |
+| `planoverrun` | The active charging plan is going to overrun its target time |
+
+### Disable an event
+
+```yaml
+messaging:
+  events:
+    soc:
+      disabled: true  # suppress SoC update notifications
+```
+
+---
+
+## Message templates
+
+Message templates support two syntaxes:
+
+**Printf-style** — for numeric formatting:
+```
+${chargedEnergy:%.1fk}kWh
+```
+This formats `chargedEnergy` as a float with one decimal place. The `k` suffix divides by 1000 (so Wh values become kWh-friendly).
+
+**Go template syntax** — for conditional logic:
+```
+{{ if .vehicleTitle }}{{ .vehicleTitle }} {{ end }}not charging.
+```
+
+### Available template variables
+
+The following variables are available in both `title` and `msg` templates. They reflect the current state at the moment the event fires.
+
+| Variable | Description |
+|---|---|
+| `mode` | Current charge mode (`off`, `now`, `minpv`, `pv`) |
+| `chargedEnergy` | Energy added in the session (Wh) |
+| `chargeDuration` | Duration of the charging session |
+| `connectedDuration` | How long the vehicle has been connected |
+| `pvPower` | Current PV generation in W |
+| `vehicleSoc` | Vehicle state of charge in % |
+| `vehicleTitle` | Display name of the connected vehicle |
+| `vehicleLimitSoc` | Configured SoC limit for the vehicle |
+| `vehicleMinSoc` | Configured minimum SoC for the vehicle |
+| `vehicleCapacity` | Vehicle battery capacity in kWh |
+| `loadpoint` | Loadpoint index (1-based) |
+
+---
+
+## Supported services
+
+### Telegram
+
+Create a Telegram bot with [@BotFather](https://t.me/botfather) and find your chat ID by messaging your bot and checking `https://api.telegram.org/bot<token>/getUpdates`.
+
+```yaml
+messaging:
+  services:
+    - type: telegram
+      token: 1234567890:ABCDefGhIJKlmNoPQRstuVWXyz
+      chats:
+        - 123456789   # your chat ID
+        - -987654321  # or a group chat ID (negative)
+```
+
+<ParamField body="token" type="string" required>
+  Your Telegram bot token from @BotFather.
+</ParamField>
+
+<ParamField body="chats" type="array" required>
+  List of chat IDs to send messages to. Use positive integers for private chats and negative integers for group chats.
+</ParamField>
+
+---
+
+### Pushover
+
+Register your application at [pushover.net](https://pushover.net) to get an app key and user/group keys.
+
+```yaml
+messaging:
+  services:
+    - type: pushover
+      app: your-app-api-token
+      recipients:
+        - your-user-key
+```
+
+<ParamField body="app" type="string" required>
+  Your Pushover application API token.
+</ParamField>
+
+<ParamField body="recipients" type="array" required>
+  List of Pushover user or group keys to notify.
+</ParamField>
+
+---
+
+### Email (SMTP)
+
+Send notifications by email using any SMTP server:
+
+```yaml
+messaging:
+  services:
+    - type: email
+      uri: smtp://user:password@smtp.example.com:587/?fromAddress=evcc@example.com&toAddresses=you@example.com
+```
+
+The `uri` follows the format:
+```
+smtp://<user>:<password>@<host>:<port>/?fromAddress=<from>&toAddresses=<to>
+```
+
+---
+
+### ntfy
+
+[ntfy](https://ntfy.sh) is a simple HTTP-based push notification service with a self-hostable server.
+
+```yaml
+messaging:
+  services:
+    - type: ntfy
+      uri: https://ntfy.sh/your-topic
+      authtoken: your-access-token   # optional, for private topics
+      priority: high                  # optional: min, low, default, high, urgent
+      tags: electric_plug             # optional: emoji tags
+```
+
+<ParamField body="uri" type="string" required>
+  Full URL to the ntfy topic, e.g. `https://ntfy.sh/my-evcc-alerts` or your self-hosted server.
+</ParamField>
+
+<ParamField body="authtoken" type="string">
+  Access token for protected topics. evcc encodes it as a Bearer auth query parameter.
+</ParamField>
+
+<ParamField body="priority" type="string">
+  Message priority. One of `min`, `low`, `default`, `high`, or `urgent`.
+</ParamField>
+
+<ParamField body="tags" type="string">
+  Comma-separated list of ntfy tags (used as emoji on supported clients).
+</ParamField>
+
+---
+
+### Home Assistant
+
+Send notifications through Home Assistant's notification services:
+
+```yaml
+messaging:
+  services:
+    - type: homeassistant
+      uri: http://homeassistant.local:8123
+      notify: notify.mobile_app_my_phone
+```
+
+See the [Home Assistant integration page](/integrations/home-assistant) for full details.
+
+---
+
+### Shoutrrr (generic)
+
+[Shoutrrr](https://containrrr.dev/shoutrrr/) is a notification library supporting many services including Slack, Discord, Gotify, Matrix, and more. Use it for any service not natively supported:
+
+```yaml
+messaging:
+  services:
+    - type: shout
+      uri: slack://token@channel
+```
+
+The `uri` format depends on the target service. Refer to the [Shoutrrr documentation](https://containrrr.dev/shoutrrr/services/overview/) for supported schemes and URI formats.
+
+---
+
+## Multiple services
+
+You can configure multiple services simultaneously. evcc sends every event notification to all configured services:
+
+```yaml
+messaging:
+  events:
+    start:
+      title: Charge started
+      msg: Started charging in "${mode}" mode
+    stop:
+      title: Charge finished
+      msg: Finished charging ${chargedEnergy:%.1fk}kWh in ${chargeDuration}.
+  services:
+    - type: telegram
+      token: your-bot-token
+      chats:
+        - 123456789
+    - type: ntfy
+      uri: https://ntfy.sh/my-evcc
+    - type: pushover
+      app: your-app-token
+      recipients:
+        - your-user-key
+```
+
+<Note>
+Each service sends notifications in a separate goroutine, so a slow or failing service does not block delivery to other services.
+</Note>

@@ -1,0 +1,213 @@
+---
+title: "Energy planning"
+description: "Set a departure time and target SoC to let evcc plan the cheapest or greenest charging window automatically, using real-time tariff data."
+---
+
+Energy planning lets you tell evcc when you need your vehicle ready and how charged it should be. evcc then calculates the optimal charging schedule — picking the cheapest or lowest-carbon windows within the available time.
+
+## How plans work
+
+A plan consists of one or more charging slots between now and your departure time. When a tariff is configured, evcc sorts available time slots by cost and selects the cheapest combination that covers the required charging duration. Without a tariff, evcc charges as late as possible to meet the deadline.
+
+From `core/planner/planner.md`:
+
+> The planner is responsible for developing a lowest-cost plan for charging a required duration until target time. A plan consists of a number of slots in ascending order of cost. If the planner has an associated tariff, costs are derived from the tariff's prices. Without tariff, the planner will only evaluate time, but not cost.
+
+The planner handles several edge cases:
+
+- **Not enough time**: if the required charging duration exceeds the time to the deadline, evcc charges continuously until the deadline
+- **Target beyond tariff horizon**: if your departure is after the last available price slot, evcc charges after the rate data ends and uses the earlier slots for remaining duration
+- **Overrun**: if a plan runs beyond the deadline (for example because SoC estimation was off), evcc continues charging and sends a `planoverrun` notification
+
+## SoC-based plans (vehicles with SoC)
+
+If your vehicle reports state of charge, you set a plan as "charge to X% by Y time":
+
+```bash
+# Charge to 80% by tomorrow at 07:30
+POST /api/vehicles/{name}/plan/soc/80/2026-04-04T07:30:00+02:00
+```
+
+evcc uses the vehicle's current SoC and the battery capacity to estimate how long charging will take. It then builds a plan that fits within the departure window.
+
+<Note>
+  SoC-based plans are set on the **vehicle**, not the loadpoint. The vehicle carries the plan so it follows the vehicle if it connects to a different loadpoint.
+</Note>
+
+To remove a plan:
+
+```bash
+DELETE /api/vehicles/{name}/plan/soc
+```
+
+## Energy-based plans (vehicles without SoC)
+
+If a vehicle does not report SoC (or you prefer to plan by energy), set a plan as "charge X kWh by Y time":
+
+```bash
+# Charge 20 kWh by tomorrow at 07:30
+POST /api/loadpoints/1/plan/energy/20/2026-04-04T07:30:00+02:00
+```
+
+Energy plans track how much energy has been delivered during the current session and stop when the target is reached.
+
+To remove an energy plan:
+
+```bash
+DELETE /api/loadpoints/1/plan/energy
+```
+
+## Repeating plans
+
+You can configure repeating weekly plans for a vehicle. These fire automatically on the selected days without requiring manual input each time:
+
+```bash
+# Add a repeating plan
+POST /api/vehicles/{name}/plan/repeating
+```
+
+The request body is a JSON array of repeating plan objects. Each plan specifies weekdays, a target time, a target SoC, and an optional timezone.
+
+Repeating plans are stored on the vehicle in evcc's database. You can manage them from the UI under the vehicle's plan settings.
+
+## Plan strategies
+
+Each plan uses a strategy that determines how evcc builds the charging schedule. Set the strategy via the API:
+
+```bash
+# Per-loadpoint plan strategy
+POST /api/loadpoints/1/plan/strategy
+
+# Per-vehicle plan strategy
+POST /api/vehicles/{name}/plan/strategy
+```
+
+### Discrete slot selection (default)
+
+evcc selects the cheapest individual slots within the planning window, even if they are not contiguous. This produces the lowest average cost but may result in short charging bursts at different times of day.
+
+### Continuous window
+
+evcc finds the cheapest *continuous* block of time long enough to complete charging. This is useful for vehicles or chargers that prefer uninterrupted sessions:
+
+```go
+// from core/planner/planner.go
+if continuous {
+    // find cheapest continuous window
+    plan = findContinuousWindow(rates, requiredDuration, targetTime)
+} else {
+    // sort rates by price and time
+    slices.SortStableFunc(rates, sortByCost)
+    plan = optimalPlan(rates, requiredDuration, targetTime)
+}
+```
+
+### Precondition duration
+
+Some vehicles require a warm-up or preconditioning period before departure. Set a `precondition` duration and evcc ensures the vehicle is charging in the slots immediately before the departure time, regardless of cost:
+
+```go
+// reduce target time by precondition duration
+targetTime = targetTime.Add(-precondition)
+```
+
+## Querying the active plan
+
+Get the currently computed plan for a loadpoint:
+
+```bash
+GET /api/loadpoints/1/plan
+```
+
+The response includes:
+
+- `plan` — list of charging slots with start, end, and cost per slot
+- `planActive` — whether a slot is currently active
+- `planProjectedStart` — when the next slot is scheduled to start
+- `planProjectedEnd` — when charging is expected to complete
+- `planOverrun` — how far the plan has exceeded the deadline (if applicable)
+
+Preview what a plan would look like without committing:
+
+```bash
+# Preview a SoC-based plan
+GET /api/loadpoints/1/plan/static/preview/soc/80/2026-04-04T07:30:00+02:00
+
+# Preview an energy-based plan
+GET /api/loadpoints/1/plan/static/preview/energy/20/2026-04-04T07:30:00+02:00
+```
+
+## Cost-optimized charging with dynamic tariffs
+
+Plans use the configured `grid` tariff to evaluate slot costs. With a dynamic tariff, evcc has access to hourly (or finer) price data and selects the cheapest windows automatically.
+
+```yaml evcc.yaml
+tariffs:
+  currency: EUR
+  grid:
+    type: template
+    template: tibber
+    token: <your-api-token>
+```
+
+When price data is available, the plan sorts slots by price ascending and picks the lowest-cost combination that fills the required duration.
+
+<Tip>
+  You can combine energy planning with smart cost charging. Smart cost charging activates the charger whenever the current rate is below your threshold; energy planning gives a deadline-based fallback that guarantees the vehicle is ready regardless of price.
+</Tip>
+
+## CO₂-optimized charging
+
+If you configure a `co2` tariff instead of (or in addition to) a dynamic price tariff, evcc uses carbon intensity forecasts to pick the greenest slots:
+
+```yaml evcc.yaml
+tariffs:
+  co2:
+    type: template
+    template: grünstromindex   # Germany only
+    zip: 10115
+```
+
+The planner treats CO₂ intensity as a "cost" and selects the slots with the lowest carbon intensity — typically overnight when wind power is high, or midday when solar generation is high.
+
+<Note>
+  CO₂ optimization requires a CO₂ forecast provider. Available providers vary by country. See the tariff integration documentation for a full list.
+</Note>
+
+## Plan overrun and notifications
+
+If evcc determines that the remaining charging duration exceeds the time to the deadline, it:
+
+1. Creates a continuous charging plan (charges without interruption until the deadline)
+2. Sends a `planoverrun` push notification (if messaging is configured)
+3. Continues charging beyond the deadline if the vehicle is still connected and SoC has not reached the target
+
+Configure the notification in `evcc.yaml`:
+
+```yaml evcc.yaml
+messaging:
+  events:
+    planoverrun:
+      title: Plan overrun
+      msg: "Plan will overrun."
+```
+
+## How evcc estimates required duration
+
+For SoC-based plans, evcc uses a SoC estimator that refines its estimate as charging progresses. If the estimator is not yet initialized (early in a session), evcc falls back to a simple calculation:
+
+```go
+// from core/loadpoint_plan.go
+func (lp *Loadpoint) getPlanRequiredDuration(goal, maxPower float64) time.Duration {
+    if lp.socBasedPlanning() {
+        if lp.socEstimator == nil {
+            return soc.RemainingChargeDuration(goal, maxPower, lp.vehicleSoc, lp.GetVehicle().Capacity())
+        }
+        return lp.socEstimator.RemainingChargeDuration(goal, maxPower)
+    }
+    energy := lp.remainingPlanEnergy(goal)
+    return time.Duration(energy * 1e3 / maxPower * float64(time.Hour))
+}
+```
+
+The effective maximum power used for duration estimation is the charger's configured maximum, constrained by the loadpoint's `maxCurrent` and the number of active phases.

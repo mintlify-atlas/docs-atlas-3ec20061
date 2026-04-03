@@ -1,0 +1,244 @@
+---
+title: "Vehicles"
+description: "Configure EVs in evcc to enable SoC reading, target charging, and automatic mode switching."
+---
+
+Configuring your vehicle allows evcc to read its battery state of charge (SoC) from the manufacturer's cloud API. With SoC data, evcc can stop charging at a target level, display remaining range in the UI, and run charge planning with a departure time.
+
+## Defining a vehicle
+
+Add each vehicle under the `vehicles:` key and give it a unique name:
+
+```yaml
+vehicles:
+  - name: car1
+    type: renault
+    title: Zoe          # display name in the UI
+    capacity: 60        # battery capacity in kWh
+    user: myuser
+    password: mypassword
+    vin: WREN...
+    onIdentify:
+      mode: pv          # switch to PV mode when this vehicle is identified
+```
+
+## Vehicle configuration parameters
+
+<ParamField path="name" type="string" required>
+  A unique identifier for this vehicle. Used when pre-assigning a vehicle to a loadpoint.
+</ParamField>
+
+<ParamField path="type" type="string" required>
+  The vehicle integration type (e.g. `tesla`, `vw`, `renault`, `hyundai`, `bmw`).
+</ParamField>
+
+<ParamField path="title" type="string">
+  Human-readable name shown in the UI. Defaults to the `name` value.
+</ParamField>
+
+<ParamField path="capacity" type="number">
+  Usable battery capacity in kWh. Enables SoC estimation when the API is unavailable and improves accuracy of charge planning.
+</ParamField>
+
+<ParamField path="vin" type="string">
+  Vehicle identification number. Required when you have multiple vehicles of the same brand in the same account.
+</ParamField>
+
+<ParamField path="onIdentify" type="object">
+  Settings to apply automatically when evcc identifies this vehicle at a loadpoint (via RFID or vehicle API match). Supports `mode`, `minSoc`, `targetSoc`, and `planSoc`.
+</ParamField>
+
+## Supported vehicles
+
+<Tabs>
+  <Tab title="Tesla">
+    Tesla uses an official (paid) vehicle API. You need a Tesla Developer Account and token pair.
+
+    ```yaml
+    vehicles:
+      - name: model3
+        type: tesla
+        title: Model 3
+        capacity: 82
+        vin: W...
+        credentials:
+          id: <client-id-from-developer.tesla.com>
+        tokens:
+          access: <access-token-from-myteslamate.com>
+          refresh: <refresh-token-from-myteslamate.com>
+        cache: 15m
+    ```
+
+    <Note>
+      The [myteslamate.com](https://www.myteslamate.com/tesla-api-application-registration/) guide walks you through creating the tokens for free. You only need to pay for Tesla API credits (around $10/month free credit is usually enough for personal use).
+    </Note>
+
+    For charging control via a Tesla Wall Connector (TWC3) or other "dumb" charger, you can route commands through a proxy:
+
+    ```yaml
+        commandProxy: https://api.myteslamate.com
+        proxyToken: <proxy-token-from-myteslamate.com>
+    ```
+  </Tab>
+  <Tab title="Volkswagen Group">
+    The Volkswagen Group (VW, Audi, SEAT/CUPRA, ŠKODA) uses the We Connect ID portal.
+
+    ```yaml
+    # Volkswagen (e-Golf, e-Up, ID family)
+    vehicles:
+      - name: id4
+        type: vw
+        title: ID.4
+        capacity: 77
+        user: myuser@example.com
+        password: mypassword
+        vin: WVWZZZ...
+
+    # Audi (e-tron, Q4 e-tron, A6 e-tron)
+    vehicles:
+      - name: etron
+        type: audi
+        title: e-tron
+        capacity: 95
+        user: myuser@example.com
+        password: mypassword
+        vin: WAUZZZ...
+    ```
+
+    SEAT/CUPRA and ŠKODA follow the same pattern with `type: seat-cupra` and `type: skoda` respectively.
+  </Tab>
+  <Tab title="Renault">
+    ```yaml
+    vehicles:
+      - name: zoe
+        type: renault
+        title: Zoe
+        capacity: 52
+        user: myuser@example.com
+        password: mypassword
+        vin: WREN...
+    ```
+
+    <Note>
+      Renault Zoe and Twingo Electric require a minimum charging current of 8 A at 3-phase. Older models require 10 A. Set `minCurrent: 8` (or `10`) on the loadpoint if you experience unstable charging.
+    </Note>
+  </Tab>
+  <Tab title="Hyundai / Kia">
+    Hyundai (Bluelink) and Kia (Connect) share the same backend. They require a `refresh_token` rather than the account password.
+
+    ```yaml
+    vehicles:
+      - name: ioniq5
+        type: hyundai
+        title: IONIQ 5
+        capacity: 72
+        user: myuser@example.com
+        password: <refresh_token>   # NOT your account password
+    ```
+
+    See the [evcc wiki](https://github.com/evcc-io/evcc/wiki/Hyundai-Kia:-Refresh-Token) for instructions on obtaining the refresh token.
+  </Tab>
+  <Tab title="Offline / generic">
+    For vehicles without a cloud API (or when you want to avoid API polling entirely), use the offline type. SoC must be entered manually in the UI.
+
+    ```yaml
+    vehicles:
+      - name: leaf
+        type: custom
+        title: Leaf
+        capacity: 40
+        features:
+          - offline   # marks vehicle as not having an API
+        soc:
+          source: const
+          value: 0
+    ```
+
+    This is also the right choice for vehicles that are supported by another integration (e.g. OVMS, TeslaFi, TeslaLogger, Teslamate) that exports SoC via MQTT or HTTP.
+  </Tab>
+</Tabs>
+
+## SoC polling settings
+
+evcc queries the vehicle API to update the state of charge. By default it only polls while charging to avoid draining the 12 V battery and to respect manufacturer API rate limits.
+
+```yaml
+loadpoints:
+  - title: Garage
+    charger: wallbe
+    soc:
+      poll:
+        # charging — update SoC only while charging (recommended default)
+        # connected — update while connected (charging or not), on the interval below
+        # always    — always update regardless of connection (single vehicle only)
+        mode: charging
+        interval: 60m     # how often to poll when NOT charging (connected/always modes)
+      estimate: true      # interpolate SoC between API updates (recommended)
+```
+
+<Warning>
+  Changing `poll.mode` to `connected` or `always` may drain your vehicle's 12 V battery or cause the manufacturer to rate-limit or ban your API access. Use at your own risk.
+</Warning>
+
+## `onIdentify` — automatic mode switching
+
+When evcc identifies a vehicle at a loadpoint (via RFID tag read or API match), it can automatically apply preferred settings for that vehicle:
+
+```yaml
+vehicles:
+  - name: car1
+    type: vw
+    title: ID.3
+    capacity: 58
+    user: myuser@example.com
+    password: mypassword
+    onIdentify:
+      mode: pv          # switch to PV-only mode when this car plugs in
+      minSoc: 20        # always charge to at least 20% (e.g. for departure readiness)
+      targetSoc: 80     # stop at 80% by default
+```
+
+Supported `onIdentify` fields:
+
+| Field       | Description                                                        |
+| ----------- | ------------------------------------------------------------------ |
+| `mode`      | Default charging mode: `off`, `now`, `minpv`, or `pv`             |
+| `minSoc`    | Minimum SoC % to reach before switching to PV-only charging        |
+| `targetSoc` | SoC % at which charging stops                                      |
+| `planSoc`   | Target SoC for scheduled (plan) charging                           |
+
+## Guest vehicles
+
+When an unknown vehicle connects (no RFID match, no API identification), evcc treats it as a **guest**. You can configure push notifications for guest connections:
+
+```yaml
+messaging:
+  events:
+    guest:
+      title: Unknown vehicle
+      msg: Unknown vehicle, guest connected?
+```
+
+Guest vehicles charge in the loadpoint's default mode (`mode:` in `loadpoints:`). Set `mode: "off"` if the charger is publicly accessible and you want to prevent unintended charging by unknown vehicles.
+
+## Supported vehicle list (selection)
+
+evcc includes integrations for 55+ vehicle types:
+
+<AccordionGroup>
+  <Accordion title="European brands">
+    Audi (e-tron, Q4, A6 e-tron) · BMW · CUPRA Born · Dacia Spring · DS Automobiles · Fiat 500e · Mercedes EQ · MG · Mini Electric · Opel Corsa-e / Mokka-e · Peugeot e-208 / e-2008 · Porsche Taycan · Renault Zoe / Megane E-Tech · SEAT Mii electric · ŠKODA Enyaq · Smart #1/#3 · Volkswagen (e-Golf, e-Up, ID family) · Volvo
+  </Accordion>
+  <Accordion title="Asian brands">
+    Aiways U5/U6 · Hyundai (Ioniq 5/6, Kona, Tucson PHEV) · Kia (EV6, Niro EV) · Mazda MX-30 · Nissan Leaf / Ariya · Subaru Solterra · Toyota bZ4X
+  </Accordion>
+  <Accordion title="American brands">
+    Tesla (Model 3/Y/S/X/Cybertruck) · Ford Mustang Mach-E / F-150 Lightning
+  </Accordion>
+  <Accordion title="Third-party integrations">
+    OVMS (Open Vehicle Monitoring System) · TeslaFi · TeslaLogger · Teslamate · Tessie · Tronity · CarData · Carwings (Nissan legacy) · evNotify
+  </Accordion>
+  <Accordion title="E-scooters / motorcycles">
+    NIU electric scooter · Zero Motorcycles
+  </Accordion>
+</AccordionGroup>

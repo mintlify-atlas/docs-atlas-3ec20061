@@ -1,0 +1,205 @@
+---
+title: "Home Assistant"
+description: "Integrate evcc with Home Assistant using MQTT, the official add-on, or the Home Assistant messenger."
+---
+
+evcc integrates with Home Assistant in several ways: as an official Home Assistant add-on, via MQTT sensors and controls, and by sending notifications directly through Home Assistant's notification services.
+
+---
+
+## Official Home Assistant add-on
+
+The easiest way to run evcc alongside Home Assistant is the official evcc add-on, available in the Home Assistant Add-on Store.
+
+<Steps>
+  <Step title="Open the Add-on Store">
+    In Home Assistant, go to **Settings → Add-ons → Add-on Store**.
+  </Step>
+  <Step title="Add the evcc repository">
+    Click the menu (⋮) in the top right and choose **Repositories**. Add:
+    ```
+    https://github.com/evcc-io/evcc
+    ```
+  </Step>
+  <Step title="Install the evcc add-on">
+    Search for **evcc** in the store and click **Install**.
+  </Step>
+  <Step title="Configure and start">
+    Edit the add-on configuration to point at your devices, then click **Start**. The evcc UI is accessible from the **Open Web UI** button.
+  </Step>
+</Steps>
+
+<Note>
+The add-on runs evcc as a supervised process inside Home Assistant OS or Home Assistant Supervised. It shares the same host network, so evcc can reach local devices directly.
+</Note>
+
+---
+
+## MQTT integration
+
+If you already have an MQTT broker (such as the Mosquitto add-on), you can expose evcc data as Home Assistant MQTT sensors and controls. This is the most flexible integration path and works whether evcc runs as an add-on or on a separate machine.
+
+### Prerequisites
+
+- MQTT broker reachable by both evcc and Home Assistant
+- evcc configured with the [MQTT integration](/integrations/mqtt)
+- Home Assistant MQTT integration enabled (**Settings → Devices & Services → Add Integration → MQTT**)
+
+### MQTT sensor examples
+
+Add these to your `configuration.yaml` (or a separate `sensors.yaml` if you use `!include`):
+
+```yaml
+mqtt:
+  sensor:
+    - name: "evcc Grid Power"
+      state_topic: "evcc/site/gridPower"
+      unit_of_measurement: "W"
+      device_class: power
+      state_class: measurement
+
+    - name: "evcc PV Power"
+      state_topic: "evcc/site/pvPower"
+      unit_of_measurement: "W"
+      device_class: power
+      state_class: measurement
+
+    - name: "evcc Home Power"
+      state_topic: "evcc/site/homePower"
+      unit_of_measurement: "W"
+      device_class: power
+      state_class: measurement
+
+    - name: "evcc Battery SoC"
+      state_topic: "evcc/site/batterySoc"
+      unit_of_measurement: "%"
+      device_class: battery
+      state_class: measurement
+
+    - name: "evcc Loadpoint 1 Mode"
+      state_topic: "evcc/loadpoints/1/mode"
+
+    - name: "evcc Loadpoint 1 Vehicle SoC"
+      state_topic: "evcc/loadpoints/1/vehicleSoc"
+      unit_of_measurement: "%"
+      device_class: battery
+      state_class: measurement
+
+    - name: "evcc Loadpoint 1 Charge Power"
+      state_topic: "evcc/loadpoints/1/chargePower"
+      unit_of_measurement: "W"
+      device_class: power
+      state_class: measurement
+
+    - name: "evcc Loadpoint 1 Charged Energy"
+      state_topic: "evcc/loadpoints/1/chargedEnergy"
+      unit_of_measurement: "kWh"
+      device_class: energy
+      state_class: total_increasing
+```
+
+### MQTT select control for charge mode
+
+Expose the charge mode as a Home Assistant `select` entity so you can change it from the dashboard:
+
+```yaml
+mqtt:
+  select:
+    - name: "evcc Loadpoint 1 Mode"
+      state_topic: "evcc/loadpoints/1/mode"
+      command_topic: "evcc/loadpoints/1/mode/set"
+      options:
+        - "off"
+        - "now"
+        - "minpv"
+        - "pv"
+```
+
+### MQTT number control for SoC limit
+
+```yaml
+mqtt:
+  number:
+    - name: "evcc Loadpoint 1 SoC Limit"
+      state_topic: "evcc/loadpoints/1/limitSoc"
+      command_topic: "evcc/loadpoints/1/limitSoc/set"
+      min: 0
+      max: 100
+      step: 5
+      unit_of_measurement: "%"
+```
+
+<Tip>
+All evcc MQTT topics are published with the retained flag, so your Home Assistant sensors will immediately display the last known value after a restart.
+</Tip>
+
+---
+
+## Home Assistant notifications via evcc
+
+evcc can send notifications directly through Home Assistant's notification services (e.g., the HA mobile app, persistent notifications, or Telegram through HA). Configure this in the `messaging` section of `evcc.yaml`:
+
+```yaml
+messaging:
+  events:
+    start:
+      title: Charge started
+      msg: Started charging in "${mode}" mode
+    stop:
+      title: Charge finished
+      msg: Finished charging ${chargedEnergy:%.1fk}kWh in ${chargeDuration}.
+  services:
+    - type: homeassistant
+      uri: http://homeassistant.local:8123
+      notify: notify.mobile_app_my_phone  # your HA notification service
+```
+
+<ParamField body="uri" type="string" required>
+  Base URL of your Home Assistant instance, e.g. `http://homeassistant.local:8123`.
+</ParamField>
+
+<ParamField body="notify" type="string">
+  The Home Assistant service to call, in `domain.service` format (e.g. `notify.mobile_app_my_phone`). If omitted, evcc creates a persistent notification instead.
+</ParamField>
+
+<ParamField body="data" type="object">
+  Optional additional payload passed as the `data` key to the service call (e.g. for notification actions or channel settings).
+</ParamField>
+
+When `notify` is set, evcc calls:
+
+```
+POST /api/services/{domain}/{service}
+{
+  "title": "Charge finished",
+  "message": "Finished charging 12.5kWh in 2h 10m."
+}
+```
+
+If the service returns HTTP 400 (e.g. newer HA Telegram integration), evcc automatically retries using the `notify.send_message` API with `entity_id`.
+
+---
+
+## Automation ideas
+
+Once evcc data is in Home Assistant as sensors, you can use it in automations:
+
+```yaml
+automation:
+  - alias: "Alert when car fully charged"
+    trigger:
+      - platform: mqtt
+        topic: "evcc/loadpoints/1/vehicleSoc"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.evcc_loadpoint_1_vehicle_soc
+        above: 79
+    action:
+      - service: notify.mobile_app_my_phone
+        data:
+          message: "Vehicle is above 80% SoC."
+```
+
+<Note>
+The community maintains additional Home Assistant integrations, dashboards, and blueprints for evcc. Search the [Home Assistant Community Forum](https://community.home-assistant.io) for "evcc" to find the latest resources.
+</Note>

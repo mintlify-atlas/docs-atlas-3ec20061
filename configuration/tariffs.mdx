@@ -1,0 +1,262 @@
+---
+title: "Tariffs"
+description: "Configure electricity prices, feed-in rates, CO2 intensity, and solar forecasts in evcc to enable smart charging."
+---
+
+Tariffs tell evcc what electricity costs (or earns) at any given time. With accurate price and forecast data, evcc can automatically shift EV charging to the cheapest or greenest hours of the day.
+
+## Tariff types
+
+evcc supports four tariff slots, each serving a distinct purpose:
+
+| Slot     | Purpose                                                                  |
+| -------- | ------------------------------------------------------------------------ |
+| `grid`   | Cost of electricity imported from the grid (EUR/kWh)                    |
+| `feedin` | Revenue for electricity exported to the grid (EUR/kWh)                  |
+| `co2`    | CO₂ intensity forecast (gCO₂eq/kWh) for green charging                  |
+| `solar`  | PV generation forecast (W) used by smart charge planning                 |
+
+```yaml
+tariffs:
+  currency: EUR   # ISO-4217 three-letter code (default: EUR)
+  grid:
+    ...
+  feedin:
+    ...
+  co2:
+    ...
+  solar:
+    ...
+```
+
+## Currency
+
+Set the currency displayed in the UI and used for cost calculations:
+
+```yaml
+tariffs:
+  currency: GBP   # British pounds
+```
+
+Supported values follow [ISO 4217](https://en.wikipedia.org/wiki/ISO_4217): `EUR`, `USD`, `GBP`, `CHF`, `SEK`, `NOK`, `DKK`, `PLN`, etc.
+
+## Grid tariff
+
+### Fixed price
+
+Use a single flat rate or define time-of-use zones with cheaper off-peak prices:
+
+```yaml
+tariffs:
+  grid:
+    type: fixed
+    price: 0.294    # EUR/kWh — applies at all times not covered by a zone
+
+    zones:
+      # Cheap night-time rate (Mon–Fri, 02:00–05:00)
+      - days: Mon-Fri
+        hours: 2-5
+        price: 0.20
+
+      # Cheap weekend rate (all day)
+      - days: Sat,Sun
+        price: 0.15
+```
+
+`days` accepts comma-separated day names or ranges (`Mon-Fri`, `Sat,Sun`, `Mon,Wed,Fri`). `hours` accepts a range in 24-hour format (`2-5` means 02:00–05:00).
+
+### Dynamic tariff — Tibber
+
+Tibber provides hourly day-ahead prices. evcc fetches the price forecast and schedules charging during the cheapest hours.
+
+```yaml
+tariffs:
+  grid:
+    type: tibber
+    token: 476c477d8a039529478ebd690d35ddd80e3308ffc49b59c65b142321aee963a4
+    # homeid: cc83e83e-8cbf-4595-9bf7-c3cf192f7d9c  # only if you have multiple homes
+```
+
+Get your API token from the [Tibber developer portal](https://developer.tibber.com/). Tibber is available in Norway, Sweden, Germany, and the Netherlands.
+
+### Dynamic tariff — Awattar
+
+Awattar publishes hourly EPEX spot prices for Germany and Austria:
+
+```yaml
+tariffs:
+  grid:
+    type: awattar
+    region: DE    # DE or AT
+```
+
+### Dynamic tariff — Octopus Energy
+
+Octopus Energy (UK) supports agile tariffs via their API:
+
+```yaml
+tariffs:
+  grid:
+    type: octopusenergy
+    apikey: sk_live_XXXXXXXXXXXXXXXXXXXXXXXX
+    accountNumber: X-XXXXXXXX   # only if you have multiple accounts
+    tariffDirection: import      # import (default) or export
+```
+
+Get your API key from the [Octopus personal details page](https://octopus.energy/dashboard/new/accounts/personal-details/api-access).
+
+### Dynamic tariff — ENTSO-E
+
+ENTSO-E provides day-ahead wholesale prices for the entire European electricity market. Many national dynamic tariffs are based on ENTSO-E data:
+
+```yaml
+tariffs:
+  grid:
+    type: entsoe
+    securitytoken: <your-token>
+    domain: BZN|DE-LU    # bidding zone — see ENTSO-E documentation for your country
+```
+
+### Dynamic tariff — Nordpool
+
+Nordpool spot prices are available for all Nordic and Central European markets:
+
+```yaml
+tariffs:
+  grid:
+    type: custom
+    # uses the Nordpool template
+    forecast:
+      source: http
+      # example region and currency — adjust to your market
+      uri: https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?market=DayAhead&date=...&deliveryArea=GER&currency=EUR
+```
+
+<Tip>Use `evcc configure` to select Nordpool from the tariff list and have the correct template rendered automatically with your region and currency.</Tip>
+
+### Other supported dynamic tariffs
+
+<AccordionGroup>
+  <Accordion title="Europe">
+    - **Amber Electric** (Australia)
+    - **CKW / EWS / EKZ / Groupe E** (Switzerland)
+    - **Elering** (Estonia)
+    - **Energinet** (Denmark — price and CO₂)
+    - **EPEX Predictor** (DE/FR/BE/NL day-ahead)
+    - **ESIOS** (Spain)
+    - **Ostrom** (Germany)
+    - **Pstryk** (Poland)
+    - **PUN** (Italy)
+    - **Smartenergy** (Austria)
+    - **Spotty Energy** (Netherlands)
+    - **Stekker** (Netherlands)
+  </Accordion>
+  <Accordion title="CO₂ sources">
+    - **Electricity Maps** (free and paid tiers, global)
+    - **Grünstromindex** (Germany, regional)
+    - **NGESO Carbon Intensity** (UK)
+    - **Energinet CO₂** (Denmark)
+    - **Green Grid Compass** (NZ)
+  </Accordion>
+</AccordionGroup>
+
+## Feed-in tariff
+
+Set the rate you receive for exporting excess PV energy to the grid. evcc uses this to calculate whether it is more economical to charge the car or export:
+
+```yaml
+tariffs:
+  feedin:
+    type: fixed
+    price: 0.082    # EUR/kWh
+```
+
+For Octopus Outgoing or similar export tariffs:
+
+```yaml
+tariffs:
+  feedin:
+    type: octopusenergy
+    apikey: sk_live_XXXXXXXXXXXXXXXXXXXXXXXX
+    tariffDirection: export
+```
+
+## CO₂ intensity forecast
+
+The `co2` slot provides a carbon intensity forecast in gCO₂eq/kWh. When no dynamic `grid` price tariff is configured, evcc uses the CO₂ forecast to schedule charging during low-carbon periods.
+
+### Grünstromindex (Germany)
+
+```yaml
+tariffs:
+  co2:
+    type: grünstromindex
+    zip: 10115          # your postal code
+    token: <api-token>  # from console.corrently.io
+```
+
+### Electricity Maps
+
+```yaml
+tariffs:
+  co2:
+    type: electricitymaps
+    token: <api-token>
+    zone: DE            # zone code from electricitymaps.com
+```
+
+The free tier of Electricity Maps covers most European zones with a 24-hour delayed forecast. A paid subscription provides real-time and forecast data.
+
+## Solar (PV generation) forecast
+
+The `solar` slot provides a PV generation forecast in watts. evcc uses it in charge planning: it shows how much solar energy is expected and can schedule charging to maximise self-consumption.
+
+### Solcast
+
+Solcast provides rooftop solar forecasts based on satellite weather data:
+
+```yaml
+tariffs:
+  solar:
+    type: solcast
+    site: <resource-id>    # from your Solcast account
+    token: <api-token>
+    interval: 3h           # how often to fetch (free plan: max 10 requests/day)
+```
+
+The free "Home User" plan at [solcast.com](https://solcast.com/free-rooftop-solar-forecasting) is sufficient for personal use. It allows 10 API requests per day.
+
+### Forecast.Solar
+
+Forecast.Solar is a free alternative that uses your roof parameters to estimate generation:
+
+```yaml
+tariffs:
+  solar:
+    type: custom
+    tariff: solar
+    features: ["cacheable"]
+    forecast:
+      source: http
+      uri: https://api.forecast.solar/estimate/48.1/11.6/30/180/10.0?time=utc&full=1&resolution=60
+      #                                          lat  lon dec  az  kWp
+```
+
+Parameters in the URI:
+- `lat` / `lon` — latitude and longitude of your installation
+- `dec` — tilt angle in degrees (0 = flat, 90 = vertical)
+- `az` — azimuth in degrees (0 = North, 90 = East, 180 = South, 270 = West)
+- `kWp` — peak power of your PV system in kilowatts
+
+## How tariffs affect smart charging
+
+When you configure tariffs, evcc gains additional capabilities:
+
+- **Cost display**: The UI shows the current electricity price and estimated charging cost for each session.
+- **Cheap-hours charging**: With a dynamic grid tariff, you can set a "plan" (target SoC + departure time) and evcc automatically charges during the cheapest hours before departure.
+- **CO₂-optimised charging**: With a CO₂ forecast (and no dynamic price), evcc shifts charging to periods of low grid carbon intensity.
+- **Battery control**: evcc can hold or charge the home battery from the grid when prices are very low, and discharge it when prices peak — provided your battery supports active battery control.
+
+<Note>
+  Smart charging based on price forecasts requires the loadpoint to be in `pv`, `minpv`, or a plan-based mode. In `now` mode evcc charges immediately regardless of price.
+</Note>

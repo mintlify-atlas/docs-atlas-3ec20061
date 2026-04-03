@@ -1,97 +1,67 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "evcc — Solar Charging"
+description: "Open-source EV charge controller and home energy management system. Maximize solar-powered charging, locally, without cloud dependencies."
 ---
 
-## Setting up
+evcc is an extensible EV charge controller and home energy management system. It connects your EV charger, solar inverter, home battery, and energy meters to intelligently charge your vehicle using clean, solar-generated power — saving money and reducing your carbon footprint.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install evcc on your home server, Raspberry Pi, or via Docker in minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Connect your charger and solar system and start solar charging today.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Configuration" icon="sliders" href="/configuration/overview">
+    Configure meters, chargers, vehicles, and tariffs with YAML.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Integrate evcc with home automation via REST and MQTT APIs.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Why evcc?
 
-Everything you need to create world-class documentation.
+evcc runs entirely on your local network — no cloud account required, no subscription fees for core features. Your energy data stays at home.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={3}>
+  <Card title="Solar-first charging" icon="sun">
+    Automatically charge your EV using surplus solar power. Switch between PV-only, mixed, and fast charging modes.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="200+ chargers supported" icon="plug">
+    Works with chargers from ABB, KEBA, go-e, Wallbox, OpenEVSE, OCPP, EEBus, and many more.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="30+ vehicle brands" icon="car">
+    Read live state of charge from Volkswagen, Tesla, BMW, Renault, Hyundai, Kia, and more.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="Smart battery management" icon="battery-full">
+    Coordinate home battery charging with EV charging. Prevent discharge during fast charging.
   </Card>
-</Columns>
+  <Card title="Dynamic tariffs" icon="bolt">
+    Optimize charging schedules based on real-time electricity prices from Tibber, Octopus, and others.
+  </Card>
+  <Card title="Home automation ready" icon="house-signal">
+    Full REST and MQTT APIs. Native Home Assistant integration available.
+  </Card>
+</CardGroup>
 
-## Need inspiration?
+## Get started
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Steps>
+  <Step title="Install evcc">
+    Run evcc on Linux, macOS, Raspberry Pi, or Docker. See [Installation](/installation) for all methods.
+  </Step>
+  <Step title="Configure your devices">
+    Edit `evcc.yaml` to connect your energy meters, EV charger, and vehicles. Use the [Configuration guide](/configuration/overview) for reference.
+  </Step>
+  <Step title="Set up charging modes">
+    Choose between **Off**, **Now** (fast charge), **Min+PV** (minimum + solar surplus), and **PV** (solar only) modes. Learn more in [Charging modes](/features/charging-modes).
+  </Step>
+  <Step title="Automate and integrate">
+    Connect evcc to Home Assistant, InfluxDB, or your own systems using the [REST API](/integrations/rest-api) or [MQTT](/integrations/mqtt).
+  </Step>
+</Steps>
+
+<Note>
+  evcc is open source under the MIT License. Some advanced features (like certain vehicle APIs) require a [sponsor token](https://sponsor.evcc.io) to support ongoing development.
+</Note>

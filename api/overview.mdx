@@ -1,0 +1,128 @@
+---
+title: "API overview"
+description: "The evcc REST API lets you read system state and control charging from any HTTP client. All endpoints are under /api and return JSON."
+---
+
+## Base URL
+
+```
+http://<evcc-host>:7070/api
+```
+
+Replace `<evcc-host>` with the hostname or IP address of your evcc instance. The default port is `7070`.
+
+## Content type
+
+All endpoints accept and return `application/json`. Set the `Content-Type: application/json` header on requests that send a body.
+
+## Response format
+
+Every response wraps its payload in a `result` key:
+
+```json
+{ "result": <value> }
+```
+
+For collections the value is an array:
+
+```json
+{ "result": [{ ... }, { ... }] }
+```
+
+Error responses include a message key:
+
+```json
+{ "message": "Unauthorized" }
+```
+
+## Authentication
+
+evcc uses cookie-based session authentication. Read-only `GET` endpoints are unauthenticated. All write operations (`POST`, `PUT`, `PATCH`, `DELETE`) require an active session cookie.
+
+To authenticate, `POST` your password to `/api/auth/login`. The server sets an `auth` cookie that your client must send on subsequent requests. See the [Authentication](/api/auth) page for details.
+
+<Note>
+  evcc is designed for local network use. There is no built-in rate limiting. Protect your instance at the network level — do not expose port 7070 to the public internet without a reverse proxy and TLS.
+</Note>
+
+## Quick start
+
+The three examples below show the common workflow: log in, read state, and change a charging mode.
+
+**1. Log in and save the session cookie**
+
+```bash
+curl -c cookies.txt -X POST http://evcc.local:7070/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"password": "your-password"}'
+```
+
+**2. Get full system state**
+
+```bash
+curl http://evcc.local:7070/api/state
+```
+
+```json
+{
+  "result": {
+    "siteTitle": "My Home",
+    "gridPower": 350,
+    "homePower": 1200,
+    "pvPower": 3800,
+    "loadpoints": [
+      {
+        "title": "Garage",
+        "mode": "pv",
+        "charging": true,
+        "chargePower": 2600
+      }
+    ]
+  }
+}
+```
+
+**3. Set a loadpoint to fast-charge mode**
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/mode/now
+```
+
+```json
+{ "result": "now" }
+```
+
+## Endpoint groups
+
+| Group | Description |
+|---|---|
+| [Authentication](/api/auth) | Login, logout, session status, and password management |
+| [Loadpoints](/api/loadpoints) | Control charging mode, SoC limits, energy limits, plans, phases, and thresholds for each charge point |
+| [Battery](/api/battery) | Manage home battery mode, buffer SoC, discharge control, and grid charge limits |
+| [Vehicles](/api/vehicles) | List configured vehicles and set per-vehicle SoC limits and charging plans |
+| [Sessions](/api/sessions) | Retrieve and export charging history, update session metadata |
+| [Tariffs](/api/tariffs) | Query electricity price and CO₂ forecasts used for smart charging |
+| [System](/api/system) | Read full system state, manage logs, restart, and configure telemetry |
+
+## Filtering state with JQ
+
+The `GET /api/state` endpoint accepts an optional `jq` query parameter. You can use [JQ](https://jqlang.github.io/jq/) expressions to extract only the fields you need:
+
+```bash
+# Get only the first loadpoint
+curl "http://evcc.local:7070/api/state?jq=.loadpoints[0]"
+
+# Get current grid power
+curl "http://evcc.local:7070/api/state?jq=.gridPower"
+```
+
+## WebSocket
+
+In addition to the REST API, evcc pushes state updates over a WebSocket at:
+
+```
+ws://<evcc-host>:7070/ws
+```
+
+The WebSocket sends the same state structure as `GET /api/state` whenever a value changes. It is useful for building live dashboards without polling.

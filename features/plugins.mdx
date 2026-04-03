@@ -1,0 +1,415 @@
+---
+title: "Plugins"
+description: "Use evcc's plugin system to integrate any device or data source not covered by a built-in template, using HTTP, MQTT, Modbus, JavaScript, Go, WebSocket, or shell scripts."
+---
+
+evcc uses a plugin system to connect to external devices and data sources. Built-in device templates (for chargers, meters, and vehicles) are themselves built using these plugins. When no template exists for your device, you can write a `custom` device configuration directly using the same plugin primitives.
+
+## Plugin concept
+
+Each plugin acts as either a **getter** (reads a value) or a **setter** (writes a value). A custom device definition maps evcc's required fields — for example, `power` for a meter or `status` and `enable` for a charger — to plugin instances.
+
+A plugin is identified by its `source` key:
+
+| `source` | Protocol | Registered as |
+|----------|----------|---------------|
+| `http` | HTTP/HTTPS requests | `NewHTTPPluginFromConfig` |
+| `mqtt` | MQTT broker messages | `NewMqttPluginFromConfig` |
+| `modbus` | Modbus RTU and TCP | `NewModbusFromConfig` |
+| `js` | JavaScript via Otto runtime | `NewJavascriptPluginFromConfig` |
+| `go` | Go code via Yaegi interpreter | `NewGoPluginFromConfig` |
+| `ws` / `websocket` | WebSocket streams | `NewSocketPluginFromConfig` |
+| `script` | Shell script execution | `NewScriptPluginFromConfig` |
+| `const` | Static constant value | — |
+
+## Custom device types
+
+You can use plugins inside `custom` type definitions for meters, chargers, and vehicles:
+
+```yaml evcc.yaml
+meters:
+  - name: my-meter
+    type: custom
+    power:
+      source: http
+      uri: http://192.168.1.100/api/power
+      jq: .power_watts
+
+chargers:
+  - name: my-charger
+    type: custom
+    status:
+      source: http
+      uri: http://192.168.1.50/api/status
+      jq: .cp_status
+    enabled:
+      source: http
+      uri: http://192.168.1.50/api/enabled
+    enable:
+      source: http
+      uri: http://192.168.1.50/api/enable
+      method: POST
+      body: '{"enable": {{.enable}}}'
+    maxcurrent:
+      source: http
+      uri: http://192.168.1.50/api/current
+      method: POST
+      body: '{"current": {{.maxcurrent}}}'
+```
+
+## Response processing pipeline
+
+Most plugins support a processing pipeline that transforms raw responses into a usable value. The pipeline settings are shared across plugin types:
+
+| Field | Description |
+|-------|-------------|
+| `jq` | jq expression to extract a value from JSON responses |
+| `regex` | Regular expression to extract a value from text responses |
+| `default` | Fallback value when regex produces no match |
+| `unpack` | Unpack binary data (e.g., `float32`, `uint16`) |
+| `decode` | Decode binary encoding (e.g., `hex`) |
+| `scale` | Multiply the numeric result by this factor |
+
+## HTTP plugin
+
+The HTTP plugin makes HTTP(S) requests and parses the response.
+
+```yaml
+power:
+  source: http
+  uri: http://192.168.1.100/api/sensor/power
+  method: GET              # GET (default), POST, PUT, PATCH, DELETE
+  headers:                 # optional request headers
+    Authorization: Bearer mytoken
+    Content-Type: application/json
+  body: '{"query": "power"}' # request body (for POST/PUT)
+  insecure: false          # set true to skip TLS verification
+  timeout: 5s             # request timeout (default: 15s)
+  cache: 30s              # cache response for this duration
+  jq: .data.power_w       # jq expression to extract value from JSON
+  scale: 0.001            # multiply result (e.g., mW to kW: 0.001)
+  auth:
+    type: basic            # basic, bearer, or digest
+    user: admin
+    password: secret
+```
+
+**Using HTTP as a setter:**
+
+When used as a setter (for `enable`, `maxcurrent`, etc.), evcc substitutes the value into the body or URI using Go template syntax:
+
+```yaml
+enable:
+  source: http
+  uri: http://192.168.1.50/switch
+  method: POST
+  body: '{"on": {{.enable}}}'  # .enable is replaced with true/false
+```
+
+## MQTT plugin
+
+The MQTT plugin subscribes to a topic and reads the most recent message. For setters, it publishes to a topic.
+
+```yaml
+power:
+  source: mqtt
+  topic: home/solar/power      # topic to subscribe to
+  timeout: 30s                 # treat as stale after this duration
+  scale: 1                     # multiply value
+  jq: .power                   # optional jq extraction from JSON payload
+  retained: false              # use retained messages for setters
+  payload: "{{.enable}}"       # payload for setters (Go template)
+```
+
+The MQTT plugin connects via the global MQTT broker configured in `evcc.yaml`:
+
+```yaml evcc.yaml
+mqtt:
+  broker: localhost:1883
+  topic: evcc
+  user: myuser
+  password: mypassword
+```
+
+**Reading a JSON MQTT payload:**
+
+```yaml
+soc:
+  source: mqtt
+  topic: vehicle/battery/state
+  jq: .stateOfCharge
+```
+
+**Publishing a value via MQTT:**
+
+```yaml
+enable:
+  source: mqtt
+  topic: charger/control/enable
+  payload: "{{.enable}}"
+  retained: true
+```
+
+## Modbus plugin
+
+The Modbus plugin reads and writes Modbus registers over TCP or RTU (RS-485).
+
+```yaml
+power:
+  source: modbus
+  id: 1                  # Modbus device ID (slave address)
+  uri: 192.168.1.100:502 # TCP connection (for Modbus TCP)
+  # device: /dev/ttyUSB0 # serial device (for Modbus RTU)
+  # comset: 8N1          # serial settings
+  # baudrate: 9600
+  register:
+    address: 40083       # register address
+    type: holding        # holding, input, or coil
+    decode: float32      # float32, float64, uint16, uint32, int16, int32, etc.
+  scale: 0.1             # optional multiplier
+  timeout: 5s
+```
+
+**Writing a Modbus register:**
+
+```yaml
+maxcurrent:
+  source: modbus
+  id: 1
+  uri: 192.168.1.100:502
+  register:
+    address: 40010
+    type: holding
+    decode: uint16
+```
+
+## JavaScript plugin
+
+The JavaScript plugin executes a script using the [Otto](https://github.com/robertkrimen/otto) JavaScript runtime. Use it for custom logic that goes beyond simple data extraction.
+
+```yaml
+enable:
+  source: js
+  script: |
+    var resp = fetch("http://192.168.1.50/control", {
+      method: "POST",
+      body: JSON.stringify({on: enable})
+    });
+    resp.status;
+```
+
+The parameter name (for example `enable`, `maxcurrent`) is available as a variable inside the script for setter operations.
+
+**Reading a computed value:**
+
+```yaml
+soc:
+  source: js
+  script: |
+    var data = JSON.parse(fetch("http://192.168.1.100/battery").body);
+    data.soc * 100;
+```
+
+**Using a shared VM with named functions:**
+
+Define a VM with shared helper functions and reference it by name:
+
+```yaml evcc.yaml
+js:
+  - name: myvm
+    code: |
+      function getStatus() {
+        var resp = fetch("http://192.168.1.50/status");
+        return JSON.parse(resp.body);
+      }
+
+chargers:
+  - name: my-charger
+    type: custom
+    status:
+      source: js
+      vm: myvm
+      script: getStatus().cp_state
+```
+
+## Go plugin
+
+The Go plugin executes Go source code at runtime using the [Yaegi](https://github.com/traefik/yaegi) interpreter. This is suitable for complex logic or when you need full Go standard library access.
+
+```yaml
+power:
+  source: go
+  script: |
+    import (
+      "encoding/json"
+      "net/http"
+    )
+    func main() (float64, error) {
+      resp, err := http.Get("http://192.168.1.100/power")
+      if err != nil { return 0, err }
+      var data struct{ Power float64 }
+      json.NewDecoder(resp.Body).Decode(&data)
+      return data.Power, nil
+    }
+```
+
+Like the JavaScript plugin, Go supports input and output transformations via the `in` and `out` fields for passing parameters and reading results.
+
+## WebSocket plugin
+
+The WebSocket plugin connects to a WebSocket server and reads streaming data. It automatically reconnects after disconnects (retry delay: 5 seconds).
+
+```yaml
+power:
+  source: ws
+  uri: ws://192.168.1.100/stream   # WebSocket URI (ws:// or wss://)
+  timeout: 30s                     # treat as stale if no message received
+  insecure: false                  # skip TLS verification for wss://
+  headers:
+    Authorization: Bearer mytoken
+  jq: .power_watts                 # extract from JSON message
+  scale: 1
+```
+
+<Note>
+  The WebSocket plugin is read-only (getter only). Use HTTP or MQTT plugins for write operations.
+</Note>
+
+## Script plugin
+
+The script plugin executes a shell command and reads its standard output. Use it to integrate with CLI tools, shell scripts, or local system commands.
+
+```yaml
+power:
+  source: script
+  cmd: /usr/local/bin/get-power.sh  # command to execute
+  timeout: 5s                        # kill command after this duration
+  cache: 30s                         # re-use last result for this duration
+  scale: 1
+  regex: 'Power: ([0-9.]+)'          # optional: extract value from output
+```
+
+**Using a script as a setter:**
+
+```yaml
+enable:
+  source: script
+  cmd: /usr/local/bin/set-enable.sh {{.enable}}
+```
+
+evcc replaces `{{.enable}}` with the value to set before executing the command. The script should exit with code 0 on success.
+
+<Warning>
+  Script plugins execute as the user running evcc. Ensure scripts have appropriate permissions and do not expose sensitive operations.
+</Warning>
+
+## Complete custom charger example
+
+The following example shows a fully custom charger using HTTP plugins for all required and some optional fields, matching the structure in `assets/js/components/Config/defaultYaml/customCharger.yaml`:
+
+```yaml evcc.yaml
+chargers:
+  - name: my-http-charger
+    type: custom
+    # Required: charger status (A=not connected, B=connected, C=charging)
+    status:
+      source: http
+      uri: http://192.168.1.50/api/status
+      jq: .cp_state
+    # Required: is charging currently enabled?
+    enabled:
+      source: http
+      uri: http://192.168.1.50/api/enabled
+      jq: .enabled
+    # Required: enable or disable charging
+    enable:
+      source: http
+      uri: http://192.168.1.50/api/enable
+      method: POST
+      body: '{"enable": {{.enable}}}'
+    # Required: set maximum charge current in amperes
+    maxcurrent:
+      source: http
+      uri: http://192.168.1.50/api/current
+      method: POST
+      body: '{"amps": {{.maxcurrent}}}'
+    # Optional: charge power in watts
+    power:
+      source: http
+      uri: http://192.168.1.50/api/power
+      jq: .watts
+    # Optional: phase currents in amperes (three entries for 3-phase)
+    currents:
+      - source: http
+        uri: http://192.168.1.50/api/phases
+        jq: .l1_amps
+      - source: http
+        uri: http://192.168.1.50/api/phases
+        jq: .l2_amps
+      - source: http
+        uri: http://192.168.1.50/api/phases
+        jq: .l3_amps
+```
+
+## Complete custom meter example
+
+```yaml evcc.yaml
+meters:
+  - name: my-solar-meter
+    type: custom
+    # Required: current power in watts (negative = export)
+    power:
+      source: http
+      uri: http://192.168.1.100/api/inverter
+      jq: .ac_power_w
+    # Optional: total meter reading in kWh
+    energy:
+      source: http
+      uri: http://192.168.1.100/api/inverter
+      jq: .total_kwh
+    # Optional: phase powers in watts
+    powers:
+      - source: http
+        uri: http://192.168.1.100/api/phases
+        jq: .l1_w
+      - source: http
+        uri: http://192.168.1.100/api/phases
+        jq: .l2_w
+      - source: http
+        uri: http://192.168.1.100/api/phases
+        jq: .l3_w
+```
+
+## Using plugins in tariffs
+
+Plugins work in custom tariff definitions too. For example, read electricity prices from a local API:
+
+```yaml evcc.yaml
+tariffs:
+  currency: EUR
+  grid:
+    type: custom
+    price:
+      source: http
+      uri: http://localhost:8080/current-price
+      jq: .eur_per_kwh
+```
+
+## Debugging plugin issues
+
+Run evcc with debug logging to see plugin activity:
+
+```bash
+evcc --log debug
+```
+
+Set per-component log levels in `evcc.yaml`:
+
+```yaml evcc.yaml
+log: info
+levels:
+  http: debug    # HTTP plugin requests and responses
+  mqtt: debug    # MQTT messages
+  modbus: trace  # Modbus frames (very verbose)
+  script: debug  # Script output
+```

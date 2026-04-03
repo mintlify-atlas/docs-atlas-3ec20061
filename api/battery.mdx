@@ -1,0 +1,260 @@
+---
+title: "Battery"
+description: "Control home battery mode, buffer SoC, discharge prevention, and grid charge limits."
+---
+
+These endpoints manage the home battery system. They control how evcc interacts with your battery — whether it should buffer solar energy, prevent discharge during fast charging, or accept grid energy when prices are low.
+
+All write endpoints require an authenticated session. See [Authentication](/api/auth).
+
+---
+
+## Battery mode
+
+### POST /api/batterymode/\{batteryMode\}
+
+Directly set the operating mode for all controllable batteries. This overrides evcc's automatic control (including price limits and discharge prevention). The external mode resets automatically after 60 seconds — your client must call this endpoint regularly to maintain the override.
+
+<ParamField path="batteryMode" type="string" required>
+  One of:
+  - `normal` — evcc controls the battery automatically
+  - `hold` — battery is held at its current SoC (no charge, no discharge)
+  - `charge` — force charge from solar or grid
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="integer">
+  The active battery mode as a number: `0` = unknown, `1` = normal, `2` = hold, `3` = charge.
+</ResponseField>
+
+```bash
+# Hold battery at current SoC
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/batterymode/hold
+```
+
+```json
+{ "result": 2 }
+```
+
+<Warning>
+  External battery mode expires after 60 seconds. If your automation stops calling this endpoint, evcc reverts to automatic control.
+</Warning>
+
+---
+
+### DELETE /api/batterymode
+
+Disable external battery control and restore evcc's default automatic behavior.
+
+**Response:**
+
+<ResponseField name="result" type="integer">
+  The active battery mode after reset (typically `1` for normal).
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X DELETE \
+  http://evcc.local:7070/api/batterymode
+```
+
+```json
+{ "result": 1 }
+```
+
+---
+
+## Buffer SoC
+
+### POST /api/buffersoc/\{soc\}
+
+Set the battery buffer SoC. evcc will not use battery energy to support EV charging when the home battery is below this level (in `pv` and `minpv` modes).
+
+<ParamField path="soc" type="number" required>
+  Buffer SoC in percent (0–100).
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="number">
+  The updated buffer SoC in percent.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/buffersoc/20
+```
+
+```json
+{ "result": 20 }
+```
+
+---
+
+### POST /api/bufferstartsoc/\{soc\}
+
+Set the battery buffer start SoC. Surplus solar charging of the EV only begins when the home battery is above this level.
+
+<ParamField path="soc" type="number" required>
+  Buffer start SoC in percent (0–100).
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="number">
+  The updated buffer start SoC in percent.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/bufferstartsoc/80
+```
+
+```json
+{ "result": 80 }
+```
+
+---
+
+## Priority SoC
+
+### POST /api/prioritysoc/\{soc\}
+
+Set the battery priority SoC. While the home battery is below this level, solar surplus charges the battery first before the EV.
+
+<ParamField path="soc" type="number" required>
+  Priority SoC in percent (0–100).
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="number">
+  The updated priority SoC in percent.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/prioritysoc/50
+```
+
+```json
+{ "result": 50 }
+```
+
+---
+
+## Discharge control
+
+### POST /api/batterydischargecontrol/\{enable\}
+
+Enable or disable home battery discharge prevention during EV fast charging. When enabled, the home battery will not discharge to support EV charging in `now` mode, preserving the battery's charge for household use.
+
+<ParamField path="enable" type="string" required>
+  `true` or `1` to enable discharge prevention, `false` or `0` to disable.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="boolean">
+  Whether discharge prevention is now active.
+</ResponseField>
+
+```bash
+# Enable discharge prevention
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/batterydischargecontrol/true
+```
+
+```json
+{ "result": true }
+```
+
+---
+
+## Grid charge limit
+
+### POST /api/batterygridchargelimit/\{cost\}
+
+Allow the home battery to charge from the grid when electricity prices or CO₂ emissions are below the specified threshold.
+
+- If a dynamic price tariff is configured, the value is treated as a price in your configured currency per kWh.
+- If a CO₂ tariff is configured, the value is treated as grams of CO₂ per kWh.
+- If neither tariff is configured, this setting has no effect.
+
+<ParamField path="cost" type="number" required>
+  Price limit in configured currency per kWh, or CO₂ limit in g/kWh.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="number">
+  The updated grid charge limit.
+</ResponseField>
+
+```bash
+# Charge battery from grid when price is below 0.15 EUR/kWh
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/batterygridchargelimit/0.15
+```
+
+```json
+{ "result": 0.15 }
+```
+
+---
+
+### DELETE /api/batterygridchargelimit
+
+Remove the battery grid charge limit. The battery will not charge from the grid based on price.
+
+**Response:**
+
+<ResponseField name="result" type="null">
+  Always `null`.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X DELETE \
+  http://evcc.local:7070/api/batterygridchargelimit
+```
+
+```json
+{ "result": null }
+```
+
+---
+
+## Residual power
+
+### POST /api/residualpower/\{power\}
+
+Set the grid connection operating point (residual power). This is a bias value added to the site's power balance. A positive value shifts the operating point towards grid import; a negative value towards grid export. Use this to account for loads evcc cannot measure.
+
+<ParamField path="power" type="number" required>
+  Residual power in watts. Minimum `0`.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="number">
+  The updated residual power in W.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/residualpower/200
+```
+
+```json
+{ "result": 200 }
+```
+
+---
+
+## Per-loadpoint battery boost
+
+Battery boost endpoints are documented in the [Loadpoints](/api/loadpoints) section:
+
+- `POST /api/loadpoints/{id}/batteryboost/{enable}` — enable or disable battery boost
+- `POST /api/loadpoints/{id}/batteryboostlimit/{soc}` — set the battery SoC floor for boost

@@ -1,0 +1,106 @@
+{
+  "projectType": "saas",
+  "projectName": "evcc",
+  "projectDescription": "evcc is an open-source, self-hosted EV charge controller and home energy management system that maximizes solar-powered EV charging without relying on cloud services.",
+  "theme": "palm",
+  "primaryColor": "#040404",
+  "lightColor": "#11d944",
+  "darkColor": "#115722",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/overview",
+              "configuration/meters",
+              "configuration/chargers",
+              "configuration/vehicles",
+              "configuration/tariffs"
+            ]
+          },
+          {
+            "group": "Features",
+            "pages": [
+              "features/charging-modes",
+              "features/smart-charging",
+              "features/battery-management",
+              "features/energy-planning",
+              "features/plugins"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/rest-api",
+              "integrations/mqtt",
+              "integrations/home-assistant",
+              "integrations/influxdb-grafana",
+              "integrations/notifications"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/auth",
+              "api/loadpoints",
+              "api/battery",
+              "api/vehicles",
+              "api/sessions",
+              "api/tariffs",
+              "api/system"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Solar-optimized EV charging with PV surplus mode",
+    "Support for 200+ EV chargers (OCPP, EEBus, Modbus, HTTP)",
+    "Vehicle integration for SoC tracking (30+ manufacturers)",
+    "Smart home battery management with grid price optimization",
+    "Scheduled charging plans with departure time and cost targets",
+    "Dynamic tariff support (Tibber, Octopus, Awattar, Entsoe, etc.)",
+    "REST and MQTT APIs for home automation integration",
+    "Plugin system for custom device integrations (Modbus, HTTP, MQTT, JS, Go)",
+    "Local-first — no cloud dependency",
+    "InfluxDB and Grafana logging support"
+  ],
+  "publicApiSurface": [
+    "GET /api/state — full site state snapshot",
+    "POST /api/loadpoints/{id}/mode/{mode} — set charging mode (off/now/minpv/pv)",
+    "POST /api/loadpoints/{id}/limitsoc/{soc} — set SoC limit",
+    "POST /api/loadpoints/{id}/limitenergy/{energy} — set energy limit",
+    "POST /api/loadpoints/{id}/plan/soc — set charging plan",
+    "POST /api/batterydischargecontrol/{enable} — control battery discharge",
+    "POST /api/batterymode/{batteryMode} — set external battery mode",
+    "POST /api/buffersoc/{soc} — set buffer SoC",
+    "GET /api/sessions — charging sessions history",
+    "GET /api/tariff/{type} — get tariff rates",
+    "POST /api/auth/login — admin authentication",
+    "MQTT topic: evcc/# — real-time state updates",
+    "MQTT topic: evcc/loadpoints/{id}/mode/set — set mode via MQTT"
+  ]
+}

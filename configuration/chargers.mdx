@@ -1,0 +1,267 @@
+---
+title: "Chargers"
+description: "Configure EV chargers (wallboxes) in evcc, including KEBA, go-e, OCPP, Easee, OpenEVSE, and EEBus devices."
+---
+
+A charger (also called a wallbox or EVSE) is the hardware that physically delivers power to your vehicle. evcc controls the charger — setting the charging current and enabling/disabling charging — and reads back status information such as the current power draw.
+
+## Defining a charger
+
+Add each charger under the `chargers:` key and give it a unique name. Reference that name in a `loadpoints:` entry.
+
+```yaml
+chargers:
+  - name: my-keba
+    type: keba-modbus
+    host: 192.168.1.80
+
+loadpoints:
+  - title: Garage
+    charger: my-keba
+```
+
+## Charger configuration parameters
+
+<ParamField path="name" type="string" required>
+  A unique identifier used to reference this charger from a loadpoint.
+</ParamField>
+
+<ParamField path="type" type="string" required>
+  The charger integration type (e.g. `keba-modbus`, `go-e-v3`, `openevse`, `easee`, `ocpp`, `eebus`).
+</ParamField>
+
+<ParamField path="host" type="string">
+  IP address or hostname of the charger. Required for most network-connected chargers.
+</ParamField>
+
+<ParamField path="port" type="integer">
+  TCP port number. Most integrations have a fixed default (e.g. `502` for Modbus TCP).
+</ParamField>
+
+## Supported chargers
+
+evcc supports over 170 charger models. The sections below show configuration examples for the most popular types.
+
+<Tabs>
+  <Tab title="KEBA">
+    KEBA KeContact P20 and P30 chargers are supported via Modbus TCP (recommended) or legacy UDP.
+
+    ```yaml
+    # KEBA KeContact P30 — Modbus TCP (recommended)
+    # Requires firmware 3.10.42 (C-series) or 1.11 (X-series)
+    chargers:
+      - name: keba
+        type: keba-modbus
+        host: 192.168.1.80
+        port: 502           # default, can be omitted
+    ```
+
+    <Note>
+      For 1-phase/3-phase switching, you also need the KEBA KeContact S10 phase switch. Enable Modbus switching control in the wallbox web menu (X-series) or via Modbus register 5050 = 3 (C-series). This feature requires a sponsor token.
+    </Note>
+
+    For older firmware using the UDP protocol:
+
+    ```yaml
+    chargers:
+      - name: keba-legacy
+        type: keba-udp
+        host: 192.168.1.80
+    ```
+  </Tab>
+  <Tab title="go-e">
+    go-e Charger V3, HOME+, and Gemini models use the HTTP API.
+
+    ```yaml
+    # go-e Charger V3 / HOME+ / Gemini
+    # Requires firmware 052.1 or later and HTTP API v1 enabled
+    chargers:
+      - name: goe
+        type: go-e-v3
+        host: 192.168.1.90
+    ```
+
+    <Note>
+      1-phase/3-phase switching requires HTTP API v2. Enable "simulate unplugging" in the go-e app under the "Car" menu. Phase switching requires a sponsor token.
+    </Note>
+
+    For older go-e Charger HOME (V2):
+
+    ```yaml
+    chargers:
+      - name: goe-v2
+        type: go-e
+        host: 192.168.1.90
+    ```
+  </Tab>
+  <Tab title="Wallbe">
+    Wallbe Eco and Pro chargers use Modbus TCP.
+
+    ```yaml
+    # Wallbe Eco / Pro
+    # Ethernet cable required; DIP switch 10 must be set to ON
+    chargers:
+      - name: wallbe
+        type: wallbe
+        uri: 192.168.0.8:502
+    ```
+  </Tab>
+  <Tab title="OpenEVSE">
+    OpenEVSE (and compatible firmware) uses a built-in HTTP API.
+
+    ```yaml
+    # OpenEVSE — requires firmware 7.0 or later
+    chargers:
+      - name: openevse
+        type: openevse
+        host: 192.168.1.100
+        user: admin
+        password: openevse
+    ```
+  </Tab>
+  <Tab title="Easee">
+    Easee Home, Charge, and Charge Core connect through the Easee cloud API.
+
+    ```yaml
+    # Easee Home / Charge / Charge Lite / Charge Core
+    # Requires a sponsor token
+    chargers:
+      - name: easee
+        type: easee
+        user: user@example.com
+        password: mysecretpassword
+        charger: EH123456        # serial number from the Easee app
+    ```
+
+    <Warning>
+      Easee requires a valid evcc sponsor token. The integration communicates with Easee cloud servers, so an internet connection is required.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## OCPP chargers
+
+OCPP 1.6J is a widely supported protocol. With OCPP, **the charger connects to evcc** (not the other way around). evcc acts as the OCPP central system and listens on port `8887`.
+
+### How it works
+
+1. In your charger's configuration, set the backend (Central System) URL to:
+   ```
+   ws://<evcc-host>:8887/
+   ```
+2. Select protocol: `OCPP-J v1.6` / `ocpp16j` / `JSON over WebSocket`
+3. Disable encryption, authentication, and passwords on the charger side
+4. Make sure the charger can reach evcc over your local network
+
+```yaml
+# Generic OCPP 1.6J charger
+# Requires a sponsor token
+chargers:
+  - name: ocpp-charger
+    type: ocpp
+    stationid: STATION01    # must match what the charger sends
+    connector: 1            # connector number (default: 1)
+```
+
+<Note>
+  Many chargers append the station ID to the backend URL automatically (e.g. `ws://evcc:8887/STATION01`). Others require you to append it manually. Check your charger's documentation.
+</Note>
+
+<Tip>
+  Configure your charger to send meter values at a short interval (under 10 seconds) for accurate power readings. Use RFID tags or set the charger to "free charging" / "autostart" so it generates the OCPP transaction that evcc needs to release charging.
+</Tip>
+
+### OCPP-specific charger variants
+
+Several manufacturers have OCPP integrations with model-specific adjustments:
+
+| Template            | Manufacturer / Model                     |
+| ------------------- | ---------------------------------------- |
+| `ocpp-wallbox`      | Wallbox Pulsar / Commander (fw ≥ 5)      |
+| `ocpp-alfen`        | Alfen Eve series                         |
+| `ocpp-zaptec`       | Zaptec Go / Pro                          |
+| `ocpp-autel`        | Autel MaxiCharger                        |
+| `ocpp-goe`          | go-e Charger (OCPP mode)                 |
+| `ocpp-mennekes-acu` | Mennekes AMTRON Professional             |
+| `ocpp-sungrow`      | Sungrow AC011E-01                        |
+| `ocpp-huawei`       | Huawei iCharger series                   |
+| `ocpp-solaredge`    | SolarEdge EV Charger                     |
+
+## EEBus chargers
+
+EEBus is a local, encrypted home-area-network protocol used by some premium chargers (e.g. EEBUS-compatible Porsche Mobile Charger Connect). It requires generating a certificate first.
+
+<Steps>
+  <Step title="Generate a certificate">
+    ```bash
+    evcc eebus-cert
+    ```
+    This prints a public/private key pair. Copy both values.
+  </Step>
+  <Step title="Configure EEBus in evcc.yaml">
+    ```yaml
+    eebus:
+      certificate:
+        public: |
+          -----BEGIN CERTIFICATE-----
+          MIIBuD...
+          -----END CERTIFICATE-----
+        private: |
+          -----BEGIN EC PRIVATE KEY-----
+          MHQCAQEEIJf...
+          -----END EC PRIVATE KEY-----
+    ```
+  </Step>
+  <Step title="Add the EEBus charger">
+    ```yaml
+    chargers:
+      - name: eebus-charger
+        type: eebus
+        ski: AA:BB:CC:DD:EE:FF:00:11  # charger's Subject Key Identifier
+        meter: true                    # use built-in charge meter
+    ```
+  </Step>
+  <Step title="Pair the charger">
+    The first time evcc connects, approve the pairing request on the charger's display or app.
+  </Step>
+</Steps>
+
+## Assigning a charger to a loadpoint
+
+Each loadpoint uses exactly one charger. You can also add an external charge meter if the charger does not have a built-in one:
+
+```yaml
+loadpoints:
+  - title: Carport
+    charger: goe          # charger name defined above
+    meter: charge-meter   # optional: external charge meter name
+    mode: pv              # default charging mode
+```
+
+## Charger capabilities
+
+Some features require specific hardware capabilities and a [sponsor token](https://sponsor.evcc.io):
+
+| Capability   | What it enables                                       |
+| ------------ | ----------------------------------------------------- |
+| `mA`         | Millisecond-accurate current control (smooth ramping) |
+| `1p3p`       | Automatic 1-phase / 3-phase switching                 |
+| `rfid`       | Vehicle identification via RFID tag                   |
+
+Charger templates that support these capabilities are marked accordingly. Run `evcc configure` to see the full list with capability badges.
+
+## Full charger list
+
+evcc includes templates for over 170 chargers, including:
+
+<AccordionGroup>
+  <Accordion title="Residential wallboxes">
+    ABB Terra AC, Alfen Eve, Alphatec, Amperfied, Bender CC/ICC, CFos, Compleo, Daheimladen, Delta, Elli (VW), em2go, Epro Wallbox, Etrel, EVBox Livo, EVCube, EVSE-DIN, Fronius Wattpilot, Hardybarth, Heidelberg, Hesotec, iCharge, Innogy eBox, Kathrein, KEBA KeContact (P20/P30), Mennekes AMTRON/HCC3, NRG Kick, Nexblue, Pantabox, Peblar, Phoenix CHARX/EM-CP, Porsche PMCC/PMCP, Pulsares, Raedian, Scheider EVlink, SENEC.Wallbox, Smartwb, SMA EV Charger, Sungrow, Tinkerforge WARP 2/3, V2C Trydan, Vestel, Victron EVCS, Voltie, Wallbe Eco/Pro, Webasto Next, Weidmüller, Zaptec Go/Pro
+  </Accordion>
+  <Accordion title="Smart plugs and switches">
+    Fritz!DECT, HomeMatic, myStrom, Shelly (1PM, topac), Tapo, Tasmota, TP-Link
+  </Accordion>
+  <Accordion title="Heat pumps (controllable loads)">
+    Daikin Altherma, Glen Dimplex, IDM, Kermi, Lambda/Zewotherm, LG Therma V, Luxtronik, Nibe S-series, Ochsner BWWP, Stiebel LWA/WPM, Vaillant aroCOLLECT, Viessmann Vitocal, Weishaupt WPM, Xtherma
+  </Accordion>
+</AccordionGroup>

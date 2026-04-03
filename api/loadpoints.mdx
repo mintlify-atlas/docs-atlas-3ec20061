@@ -1,0 +1,871 @@
+---
+title: "Loadpoints"
+description: "Control each EV charge point — charging mode, SoC and energy limits, charging plans, phase selection, thresholds, and vehicle assignment."
+---
+
+A loadpoint represents a single EV charge point (wallbox). evcc numbers loadpoints starting at `1`. You can find the ID from the `GET /api/state` response where `loadpoints` is a zero-indexed array — loadpoint at index `0` has API ID `1`.
+
+All write endpoints on this page require an authenticated session. See [Authentication](/api/auth).
+
+---
+
+## Mode control
+
+### POST /api/loadpoints/\{id\}/mode/\{mode\}
+
+Set the charging mode for a loadpoint.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="mode" type="string" required>
+  One of:
+  - `off` — charging disabled
+  - `now` — charge at maximum power immediately
+  - `minpv` — charge at minimum current, boost with solar surplus
+  - `pv` — charge only when solar surplus is available
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="string">
+  The active mode after the update (`off`, `now`, `minpv`, or `pv`).
+</ResponseField>
+
+```bash
+# Switch to solar-only mode
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/mode/pv
+```
+
+```json
+{ "result": "pv" }
+```
+
+---
+
+## Priority
+
+### POST /api/loadpoints/\{id\}/priority/\{priority\}
+
+Set the priority for this loadpoint relative to others. When multiple loadpoints compete for solar surplus, the one with the highest priority value charges first.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="priority" type="integer" required>
+  Priority value. Higher numbers mean higher priority. Minimum `0`.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="integer">
+  The updated priority value.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/priority/2
+```
+
+```json
+{ "result": 2 }
+```
+
+---
+
+## SoC and energy limits
+
+### POST /api/loadpoints/\{id\}/limitsoc/\{soc\}
+
+Set the SoC limit for the vehicle connected to this loadpoint. Charging stops when the vehicle reaches this SoC. Requires a vehicle with known SoC. The limit persists across charging sessions.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="soc" type="number" required>
+  Target SoC in percent (0–100).
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="number">
+  The updated limit SoC in percent.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/limitsoc/80
+```
+
+```json
+{ "result": 80 }
+```
+
+---
+
+### POST /api/loadpoints/\{id\}/limitenergy/\{energy\}
+
+Set an energy limit in kWh for this loadpoint. Only available for guest vehicles or vehicles without known SoC. The limit is cleared when the vehicle disconnects.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="energy" type="number" required>
+  Energy limit in kWh. Minimum `0`.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="number">
+  The updated energy limit in kWh.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/limitenergy/20
+```
+
+```json
+{ "result": 20 }
+```
+
+---
+
+## Current limits
+
+### POST /api/loadpoints/\{id\}/maxcurrent/\{current\}
+
+Set the maximum charging current for this loadpoint.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="current" type="number" required>
+  Maximum current in amperes. Minimum `0`.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="number">
+  The updated maximum current in A.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/maxcurrent/16
+```
+
+```json
+{ "result": 16 }
+```
+
+---
+
+### POST /api/loadpoints/\{id\}/mincurrent/\{current\}
+
+Set the minimum charging current for this loadpoint. This is the floor used in `minpv` and `pv` modes.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="current" type="number" required>
+  Minimum current in amperes. Minimum `0`.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="number">
+  The updated minimum current in A.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/mincurrent/6
+```
+
+```json
+{ "result": 6 }
+```
+
+---
+
+## Phase control
+
+### POST /api/loadpoints/\{id\}/phases/\{phases\}
+
+Set the allowed number of charging phases. For chargers that support automatic phase switching, this selects the desired mode. For manually switched chargers, it tells evcc how many phases are physically connected.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="phases" type="string" required>
+  One of:
+  - `0` — automatic (charger decides)
+  - `1` — force single-phase charging
+  - `3` — force three-phase charging
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="number">
+  The active phase setting.
+</ResponseField>
+
+| Status | Meaning |
+|---|---|
+| `200` | Phase setting updated. |
+| `400` | Invalid value (e.g. `0` on a charger that cannot auto-switch). |
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/phases/1
+```
+
+```json
+{ "result": 1 }
+```
+
+---
+
+## Solar thresholds
+
+These settings control when evcc starts and stops charging in `pv` and `minpv` modes.
+
+### POST /api/loadpoints/\{id\}/enable/threshold/\{threshold\}
+
+Set the surplus power threshold to start charging. Charging begins when available solar surplus exceeds this value.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="threshold" type="number" required>
+  Power threshold in watts. Minimum `0`.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="number">
+  The updated enable threshold in W.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/enable/threshold/1400
+```
+
+```json
+{ "result": 1400 }
+```
+
+---
+
+### POST /api/loadpoints/\{id\}/enable/delay/\{delay\}
+
+Set the delay before charging starts once the enable threshold is exceeded. Prevents brief surplus spikes from triggering a charging session.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="delay" type="integer" required>
+  Delay in seconds.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="integer">
+  The stored delay in **nanoseconds** (multiply your input seconds by 1,000,000,000).
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/enable/delay/60
+```
+
+```json
+{ "result": 60000000000 }
+```
+
+<Note>
+  The response value is in nanoseconds (Go's native duration format), so a 60-second delay returns `60000000000`.
+</Note>
+
+---
+
+### POST /api/loadpoints/\{id\}/disable/threshold/\{threshold\}
+
+Set the grid draw threshold to stop charging. In solar mode, charging stops when grid draw exceeds this value for the configured disable delay.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="threshold" type="number" required>
+  Grid power threshold in watts. Minimum `0`.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="number">
+  The updated disable threshold in W.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/disable/threshold/200
+```
+
+```json
+{ "result": 200 }
+```
+
+---
+
+### POST /api/loadpoints/\{id\}/disable/delay/\{delay\}
+
+Set the delay before charging stops after the disable threshold is exceeded.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="delay" type="integer" required>
+  Delay in seconds.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="integer">
+  The stored delay in nanoseconds.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/disable/delay/300
+```
+
+```json
+{ "result": 300000000000 }
+```
+
+---
+
+## Smart cost limits
+
+### POST /api/loadpoints/\{id\}/smartcostlimit/\{cost\}
+
+Set a cost or emission limit for fast-charging using grid energy. When a dynamic tariff is configured, charging is allowed at full power when the price is below this limit. When a CO₂ tariff is configured, the value is treated as a g/kWh threshold.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="cost" type="number" required>
+  Cost limit in your configured currency (default EUR/kWh) or CO₂ in g/kWh.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="number">
+  The updated smart cost limit.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/smartcostlimit/0.20
+```
+
+```json
+{ "result": 0.20 }
+```
+
+---
+
+### DELETE /api/loadpoints/\{id\}/smartcostlimit
+
+Remove the smart cost limit for this loadpoint.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="null">
+  Always `null`.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X DELETE \
+  http://evcc.local:7070/api/loadpoints/1/smartcostlimit
+```
+
+```json
+{ "result": null }
+```
+
+---
+
+## Smart feed-in priority limits
+
+### POST /api/loadpoints/\{id\}/smartfeedinprioritylimit/\{cost\}
+
+Set a feed-in price threshold. When the feed-in price exceeds this limit, charging is paused to allow excess solar power to be sold to the grid.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="cost" type="number" required>
+  Feed-in price limit in configured currency per kWh.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="number">
+  The updated feed-in priority limit.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/smartfeedinprioritylimit/0.10
+```
+
+```json
+{ "result": 0.10 }
+```
+
+---
+
+### DELETE /api/loadpoints/\{id\}/smartfeedinprioritylimit
+
+Remove the feed-in priority limit for this loadpoint.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="null">
+  Always `null`.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X DELETE \
+  http://evcc.local:7070/api/loadpoints/1/smartfeedinprioritylimit
+```
+
+---
+
+## Charging plans
+
+Charging plans let you schedule a charging session to reach a target SoC or energy amount by a specific time. evcc uses tariff data to fill the cheapest hours.
+
+### GET /api/loadpoints/\{id\}/plan
+
+Get the current active charging plan for a loadpoint.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="object">
+  <Expandable title="result fields">
+    <ResponseField name="planId" type="integer">
+      Internal plan identifier.
+    </ResponseField>
+    <ResponseField name="planTime" type="string">
+      Target completion time in RFC 3339 format.
+    </ResponseField>
+    <ResponseField name="duration" type="integer">
+      Required charging duration in seconds.
+    </ResponseField>
+    <ResponseField name="power" type="number">
+      Charging power used for plan calculation in W.
+    </ResponseField>
+    <ResponseField name="plan" type="array">
+      Array of rate slots, each with `start`, `end`, and `value` fields.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash
+curl http://evcc.local:7070/api/loadpoints/1/plan
+```
+
+```json
+{
+  "result": {
+    "planId": 1,
+    "planTime": "2025-07-20T07:00:00Z",
+    "duration": 7200,
+    "power": 7400,
+    "plan": [
+      { "start": "2025-07-19T23:00:00Z", "end": "2025-07-20T01:00:00Z", "value": 0.12 },
+      { "start": "2025-07-20T05:00:00Z", "end": "2025-07-20T07:00:00Z", "value": 0.15 }
+    ]
+  }
+}
+```
+
+---
+
+### POST /api/loadpoints/\{id\}/plan/energy/\{energy\}/\{timestamp\}
+
+Create an energy-based charging plan. Available only for guest vehicles or vehicles without known SoC.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="energy" type="number" required>
+  Energy target in kWh. Minimum `0`.
+</ParamField>
+
+<ParamField path="timestamp" type="string" required>
+  Target completion time in RFC 3339 format (e.g. `2025-07-20T07:00:00Z`). URL-encode the `+` in timezone offsets.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="object">
+  <Expandable title="result fields">
+    <ResponseField name="energy" type="number">Confirmed energy target in kWh.</ResponseField>
+    <ResponseField name="time" type="string">Confirmed target time in RFC 3339 format.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  "http://evcc.local:7070/api/loadpoints/1/plan/energy/20/2025-07-20T07%3A00%3A00Z"
+```
+
+```json
+{ "result": { "energy": 20, "time": "2025-07-20T07:00:00Z" } }
+```
+
+---
+
+### DELETE /api/loadpoints/\{id\}/plan/energy
+
+Delete the energy-based charging plan.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+```bash
+curl -b cookies.txt -X DELETE \
+  http://evcc.local:7070/api/loadpoints/1/plan/energy
+```
+
+---
+
+### POST /api/loadpoints/\{id\}/plan/strategy
+
+Update the charging plan strategy for a loadpoint.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+**Request body:**
+
+<ParamField body="continuous" type="boolean">
+  Force continuous charging (do not pause between cheap slots).
+</ParamField>
+
+<ParamField body="precondition" type="integer">
+  Pre-conditioning duration in seconds. The vehicle's climate system is activated this many seconds before the plan target time.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="object">
+  <Expandable title="result fields">
+    <ResponseField name="continuous" type="boolean">Whether continuous planning is active.</ResponseField>
+    <ResponseField name="precondition" type="integer">Pre-conditioning duration in seconds.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/plan/strategy \
+  -H "Content-Type: application/json" \
+  -d '{"continuous": false, "precondition": 1800}'
+```
+
+```json
+{ "result": { "continuous": false, "precondition": 1800 } }
+```
+
+---
+
+### GET /api/loadpoints/\{id\}/plan/static/preview/soc/\{soc\}/\{timestamp\}
+
+Preview what a SoC-based charging plan would look like without saving it. Useful for displaying a plan preview in a UI before the user confirms.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="soc" type="number" required>
+  Target SoC in percent (0–100). Requires a vehicle with known SoC.
+</ParamField>
+
+<ParamField path="timestamp" type="string" required>
+  Target completion time in RFC 3339 format.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="object">
+  Same structure as the `GET /api/loadpoints/{id}/plan` response, without `planId`.
+</ResponseField>
+
+```bash
+curl "http://evcc.local:7070/api/loadpoints/1/plan/static/preview/soc/80/2025-07-20T07%3A00%3A00Z"
+```
+
+---
+
+### GET /api/loadpoints/\{id\}/plan/static/preview/energy/\{energy\}/\{timestamp\}
+
+Preview an energy-based charging plan without saving it.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="energy" type="number" required>
+  Energy target in kWh.
+</ParamField>
+
+<ParamField path="timestamp" type="string" required>
+  Target completion time in RFC 3339 format.
+</ParamField>
+
+```bash
+curl "http://evcc.local:7070/api/loadpoints/1/plan/static/preview/energy/20/2025-07-20T07%3A00%3A00Z"
+```
+
+---
+
+### GET /api/loadpoints/\{id\}/plan/repeating/preview/\{soc\}/\{weekdays\}/\{hourMinuteTime\}/\{timezone\}
+
+Simulate a repeating charging plan and see the next scheduled slot. Does not save anything.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="soc" type="number" required>
+  Target SoC in percent (0–100).
+</ParamField>
+
+<ParamField path="weekdays" type="array" required>
+  Weekday numbers. `0` = Sunday, `1` = Monday, …, `6` = Saturday.
+</ParamField>
+
+<ParamField path="hourMinuteTime" type="string" required>
+  Target time in `HH:MM` format.
+</ParamField>
+
+<ParamField path="timezone" type="string" required>
+  IANA timezone identifier (e.g. `Europe/Berlin`).
+</ParamField>
+
+---
+
+## Battery boost
+
+### POST /api/loadpoints/\{id\}/batteryboost/\{enable\}
+
+Enable or disable battery boost for a loadpoint. When active, home battery power supplements solar power to charge the vehicle faster, until the home battery drops to the configured SoC limit.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="enable" type="string" required>
+  `true` or `1` to enable, `false` or `0` to disable.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="boolean">
+  Whether battery boost is now active.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/batteryboost/true
+```
+
+```json
+{ "result": true }
+```
+
+<Note>
+  Battery boost does not work while the home battery is on hold (e.g. during fast charging with discharge prevention enabled).
+</Note>
+
+---
+
+### POST /api/loadpoints/\{id\}/batteryboostlimit/\{soc\}
+
+Set the home battery SoC limit for battery boost. Boost stops when the home battery reaches this level. Default is `100`, which effectively disables the feature in the UI.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="soc" type="number" required>
+  SoC limit in percent (0–100). Setting to `100` disables boost in the UI.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="integer">
+  The updated battery boost SoC limit.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/batteryboostlimit/20
+```
+
+```json
+{ "result": 20 }
+```
+
+---
+
+## Vehicle assignment
+
+### POST /api/loadpoints/\{id\}/vehicle/\{name\}
+
+Assign a configured vehicle to a loadpoint. Use the vehicle's `name` as defined in `evcc.yaml`.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  Vehicle name as configured in `evcc.yaml` (e.g. `vehicle_1`). Only alphanumeric characters and `_.:-` are allowed.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="object">
+  <Expandable title="result fields">
+    <ResponseField name="vehicle" type="string">Display title of the assigned vehicle.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/loadpoints/1/vehicle/vehicle_1
+```
+
+```json
+{ "result": { "vehicle": "Blue e-Golf" } }
+```
+
+---
+
+### DELETE /api/loadpoints/\{id\}/vehicle
+
+Remove the vehicle assignment from a loadpoint. The connected vehicle is treated as a guest vehicle.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+```bash
+curl -b cookies.txt -X DELETE \
+  http://evcc.local:7070/api/loadpoints/1/vehicle
+```
+
+---
+
+### PATCH /api/loadpoints/\{id\}/vehicle
+
+Trigger automatic vehicle detection for this loadpoint. evcc will attempt to identify the connected vehicle from RFID, Bluetooth, or API polling.
+
+<ParamField path="id" type="integer" required>
+  Loadpoint index, starting at `1`.
+</ParamField>
+
+```bash
+curl -b cookies.txt -X PATCH \
+  http://evcc.local:7070/api/loadpoints/1/vehicle
+```
+
+---
+
+## Global convenience endpoints
+
+These endpoints apply a setting to **all** loadpoints at once.
+
+### POST /api/smartcostlimit/\{cost\}
+
+Set the smart cost limit for all loadpoints simultaneously.
+
+<ParamField path="cost" type="number" required>
+  Cost limit in configured currency per kWh or CO₂ in g/kWh.
+</ParamField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/smartcostlimit/0.20
+```
+
+---
+
+### DELETE /api/smartcostlimit
+
+Remove the smart cost limit from all loadpoints.
+
+```bash
+curl -b cookies.txt -X DELETE \
+  http://evcc.local:7070/api/smartcostlimit
+```
+
+---
+
+### POST /api/smartfeedinprioritylimit/\{cost\}
+
+Set the feed-in priority limit for all loadpoints simultaneously.
+
+<ParamField path="cost" type="number" required>
+  Feed-in price limit in configured currency per kWh.
+</ParamField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/smartfeedinprioritylimit/0.10
+```
+
+---
+
+### DELETE /api/smartfeedinprioritylimit
+
+Remove the feed-in priority limit from all loadpoints.
+
+```bash
+curl -b cookies.txt -X DELETE \
+  http://evcc.local:7070/api/smartfeedinprioritylimit
+```

@@ -1,0 +1,136 @@
+---
+title: "Authentication"
+description: "Cookie-based session authentication for write access to the evcc API."
+---
+
+evcc uses cookie-based session authentication. All read (`GET`) endpoints are publicly accessible without credentials. Write operations (`POST`, `PUT`, `PATCH`, `DELETE`) require an authenticated session.
+
+## How it works
+
+1. Send your admin password to `POST /api/auth/login`.
+2. The server responds with a `Set-Cookie` header containing a signed `auth` cookie.
+3. Include that cookie on every subsequent write request.
+4. Call `POST /api/auth/logout` to invalidate the session.
+
+The cookie is `HttpOnly` and scoped to `SameSite=Strict`, so it cannot be read by JavaScript and is not sent on cross-site requests.
+
+<Tip>
+  Use `curl -c cookies.txt` to save cookies and `curl -b cookies.txt` to send them on follow-up requests.
+</Tip>
+
+---
+
+## POST /api/auth/login
+
+Log in as the administrator. Returns a session cookie on success.
+
+### Request body
+
+<ParamField body="password" type="string" required>
+  The administrator password configured in evcc.
+</ParamField>
+
+### Responses
+
+| Status | Meaning |
+|---|---|
+| `200` | Login successful. Session cookie set via `Set-Cookie` header. |
+| `401` | Invalid password. |
+
+### Example
+
+```bash
+curl -c cookies.txt -X POST http://evcc.local:7070/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"password": "mysecretpassword"}'
+```
+
+On success the server returns HTTP 200 with a header like:
+
+```
+Set-Cookie: auth=ey...qY; Path=/; Expires=Fri, 04 Apr 2025 14:35:37 GMT; HttpOnly; SameSite=Strict
+```
+
+---
+
+## POST /api/auth/logout
+
+Invalidate the current session and clear the session cookie.
+
+### Responses
+
+| Status | Meaning |
+|---|---|
+| `200` | Logout successful. Cookie cleared via `Set-Cookie: auth=; Path=/; HttpOnly`. |
+
+### Example
+
+```bash
+curl -b cookies.txt -X POST http://evcc.local:7070/api/auth/logout
+```
+
+---
+
+## GET /api/auth/status
+
+Check whether the current session is authenticated.
+
+### Responses
+
+| Status | Meaning |
+|---|---|
+| `200` | Returns `true` (authenticated) or `false` (not authenticated) as plain text. |
+
+### Response body
+
+Returns plain text (`text/plain`), not JSON:
+
+| Value | Meaning |
+|---|---|
+| `true` | You have an active session. |
+| `false` | You are not logged in. |
+
+### Example
+
+```bash
+curl -b cookies.txt http://evcc.local:7070/api/auth/status
+```
+
+```
+true
+```
+
+---
+
+## PUT /api/auth/password
+
+Change the administrator password. You must be logged in to call this endpoint.
+
+### Request body
+
+<ParamField body="current" type="string" required>
+  The current administrator password.
+</ParamField>
+
+<ParamField body="new" type="string" required>
+  The new administrator password.
+</ParamField>
+
+### Responses
+
+| Status | Meaning |
+|---|---|
+| `202` | Password changed successfully. |
+| `400` | Invalid request (e.g. wrong current password or malformed body). |
+
+### Example
+
+```bash
+curl -b cookies.txt -X PUT http://evcc.local:7070/api/auth/password \
+  -H "Content-Type: application/json" \
+  -d '{"current": "oldpassword", "new": "newpassword"}'
+```
+
+<Warning>
+  After changing the password, your existing session cookie remains valid until it expires or you log out. Other clients using the old cookie will be rejected on their next write request.
+</Warning>

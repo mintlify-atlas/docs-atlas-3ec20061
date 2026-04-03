@@ -1,0 +1,247 @@
+---
+title: "REST API"
+description: "Control and monitor evcc programmatically using its HTTP REST API."
+---
+
+evcc exposes a REST API on port `7070` that gives you full programmatic access to the system state, loadpoint controls, vehicle settings, sessions, tariffs, and more. The same API powers the evcc web UI.
+
+## Base URL
+
+```
+http://evcc:7070/api
+```
+
+Replace `evcc` with your host's IP address or hostname. If you're running behind a reverse proxy, use your configured `externalurl` instead.
+
+<Note>
+All write operations (POST, PUT, DELETE) require authentication. Read operations on `/api/state` do not require authentication by default.
+</Note>
+
+## Authentication
+
+evcc uses cookie-based authentication. Log in once to receive a session cookie, then include it with every subsequent request.
+
+### Log in
+
+```bash
+curl -c cookies.txt -X POST http://evcc:7070/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"password": "your-password"}'
+```
+
+A successful login returns HTTP `200` and sets an `auth` cookie:
+
+```
+Set-Cookie: auth=ey...qY; Path=/; Expires=...; HttpOnly; SameSite=Strict
+```
+
+### Use the cookie
+
+Pass the saved cookie file with subsequent requests:
+
+```bash
+curl -b cookies.txt -X POST http://evcc:7070/api/loadpoints/1/mode/pv
+```
+
+### Log out
+
+```bash
+curl -b cookies.txt -c cookies.txt -X POST http://evcc:7070/api/auth/logout
+```
+
+---
+
+## System state
+
+### GET /api/state
+
+Returns the complete current state of the system — site power flows, all loadpoint data, vehicle states, tariff info, and settings. This is the same data the UI consumes.
+
+```bash
+curl http://evcc:7070/api/state
+```
+
+You can filter the response with a [JQ](https://jqlang.github.io/jq/) expression using the `jq` query parameter:
+
+<CodeGroup>
+
+```bash Complete state
+curl "http://evcc:7070/api/state"
+```
+
+```bash First loadpoint only
+curl "http://evcc:7070/api/state?jq=.loadpoints%5B0%5D"
+```
+
+</CodeGroup>
+
+The response wraps all data in a `result` key:
+
+```json
+{
+  "result": {
+    "siteTitle": "Home",
+    "gridPower": 1234.5,
+    "pvPower": 3500.0,
+    "homePower": 850.0,
+    "loadpoints": [ ... ],
+    ...
+  }
+}
+```
+
+<Tip>
+Use `jq` filtering server-side to reduce payload size when polling specific values.
+</Tip>
+
+---
+
+## Endpoint categories
+
+### Loadpoints
+
+Loadpoints are indexed starting at `1`. All loadpoint endpoints follow the pattern `/api/loadpoints/{id}/...`.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/loadpoints/{id}/mode/{mode}` | POST | Set charge mode (`off`, `now`, `minpv`, `pv`) |
+| `/api/loadpoints/{id}/limitsoc/{soc}` | POST | Set SoC limit (0–100) for vehicles with known SoC |
+| `/api/loadpoints/{id}/limitenergy/{energy}` | POST | Set energy limit in kWh for guest/unknown SoC vehicles |
+| `/api/loadpoints/{id}/mincurrent/{current}` | POST | Set minimum charging current (A) |
+| `/api/loadpoints/{id}/maxcurrent/{current}` | POST | Set maximum charging current (A) |
+| `/api/loadpoints/{id}/phases/{phases}` | POST | Set phases (0=auto, 1=single, 3=three) |
+| `/api/loadpoints/{id}/priority/{priority}` | POST | Set loadpoint priority (higher = more priority) |
+| `/api/loadpoints/{id}/vehicle/{name}` | POST | Assign a vehicle to the loadpoint |
+| `/api/loadpoints/{id}/vehicle` | DELETE | Remove vehicle assignment |
+| `/api/loadpoints/{id}/smartcostlimit/{cost}` | POST | Set smart charging cost limit |
+| `/api/loadpoints/{id}/batteryboost/{enable}` | POST | Enable or disable battery boost |
+| `/api/loadpoints/{id}/plan` | GET | Get the active charging plan |
+| `/api/loadpoints/{id}/plan/energy/{energy}/{timestamp}` | POST | Create an energy-based charging plan |
+
+### Battery
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/buffersoc/{soc}` | POST | Set battery buffer SoC |
+| `/api/bufferstartsoc/{soc}` | POST | Set battery buffer start SoC |
+| `/api/prioritysoc/{soc}` | POST | Set battery priority SoC |
+| `/api/batterydischargecontrol/{enable}` | POST | Prevent battery discharge during fast charging |
+| `/api/batterymode/{batteryMode}` | POST | Override battery mode (`normal`, `hold`, `charge`) |
+| `/api/batterymode` | DELETE | Restore default evcc battery control |
+| `/api/batterygridchargelimit/{cost}` | POST | Charge battery from grid below cost threshold |
+
+### Vehicles
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/vehicles/{name}/limitsoc/{soc}` | POST | Set per-vehicle SoC limit |
+| `/api/vehicles/{name}/minsoc/{soc}` | POST | Set minimum SoC (fast-charge until reached) |
+| `/api/vehicles/{name}/plan/soc/{soc}/{timestamp}` | POST | Create a SoC-based charging plan |
+| `/api/vehicles/{name}/plan/repeating` | POST | Update repeating charging plans |
+
+### Sessions
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/sessions` | GET | List charging sessions (JSON or CSV) |
+| `/api/sessions?month=2&year=2025` | GET | Filter sessions by month and year |
+| `/api/session/{id}` | PUT | Update the vehicle on a session |
+| `/api/session/{id}` | DELETE | Delete a charging session |
+
+### Tariffs
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/tariff/grid` | GET | Grid tariff rates for upcoming hours |
+| `/api/tariff/feedin` | GET | Feed-in tariff rates |
+| `/api/tariff/co2` | GET | CO₂ intensity forecast |
+| `/api/tariff/solar` | GET | Solar generation forecast |
+
+### System
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/system/log` | GET | Retrieve recent log lines |
+| `/api/system/log/areas` | GET | List available log areas |
+| `/api/system/cache` | DELETE | Clear all cached data |
+| `/api/system/shutdown` | POST | Shut down evcc |
+| `/api/auth/status` | GET | Check authentication status |
+| `/api/auth/password` | PUT | Change admin password |
+
+---
+
+## Common examples
+
+### Set charge mode to solar-only
+
+```bash
+curl -b cookies.txt -X POST http://evcc:7070/api/loadpoints/1/mode/pv
+```
+
+### Set SoC limit to 80%
+
+```bash
+curl -b cookies.txt -X POST http://evcc:7070/api/loadpoints/1/limitsoc/80
+```
+
+### Set energy limit to 20 kWh (guest vehicle)
+
+```bash
+curl -b cookies.txt -X POST http://evcc:7070/api/loadpoints/1/limitenergy/20
+```
+
+### Get charging sessions for March 2025
+
+```bash
+curl -b cookies.txt "http://evcc:7070/api/sessions?month=3&year=2025"
+```
+
+### Download sessions as CSV
+
+```bash
+curl -b cookies.txt "http://evcc:7070/api/sessions?format=csv" -o sessions.csv
+```
+
+### Set battery buffer SoC to 20%
+
+```bash
+curl -b cookies.txt -X POST http://evcc:7070/api/buffersoc/20
+```
+
+### Apply smart cost limit across all loadpoints
+
+```bash
+curl -b cookies.txt -X POST http://evcc:7070/api/smartcostlimit/0.25
+```
+
+---
+
+## Response format
+
+All endpoints return JSON with a `result` key wrapping the value:
+
+```json
+{ "result": 80 }
+```
+
+Boolean results:
+
+```json
+{ "result": true }
+```
+
+Null results (after a DELETE that clears a value):
+
+```json
+{ "result": null }
+```
+
+---
+
+## OpenAPI specification
+
+The complete API specification is available in OpenAPI 3.1 format in the evcc source repository at `server/openapi.yaml`. You can load it into any OpenAPI-compatible tool such as Swagger UI, Insomnia, or Postman for interactive exploration.
+
+<Tip>
+The live demo at `https://demo.evcc.io/api` reflects the OpenAPI spec's server URL and is useful for read-only exploration.
+</Tip>

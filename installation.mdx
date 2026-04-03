@@ -1,0 +1,357 @@
+---
+title: "Installation"
+description: "Install evcc on Linux, Raspberry Pi, macOS, or Docker. Covers package managers, manual binary installation, and initial configuration."
+keywords: ["evcc install", "docker", "raspberry pi", "apt", "homebrew", "linux", "evcc.yaml"]
+---
+
+evcc runs on any Linux or macOS machine on your local network. Choose the installation method that fits your setup.
+
+<Tabs>
+  <Tab title="Docker">
+
+Docker is the quickest way to get evcc running, especially if you already use Docker Compose for home automation.
+
+**Prerequisites:** Docker and Docker Compose installed on your host.
+
+Create a `docker-compose.yml` file:
+
+```yaml docker-compose.yml
+services:
+  evcc:
+    image: evcc/evcc:latest
+    ports:
+      - "7070:7070"   # UI and REST API
+      - "7090:7090/udp" # KEBA charger discovery
+      - "8887:8887"   # OCPP charger connections
+    volumes:
+      - ./evcc.yaml:/etc/evcc.yaml
+      - evcc-data:/var/lib/evcc
+    restart: unless-stopped
+    network_mode: host   # required for mDNS and local device discovery
+
+volumes:
+  evcc-data:
+```
+
+<Note>
+  `network_mode: host` is required for mDNS-based device discovery and for protocols like KEBA UDP (port 7090) and SMA Energy Manager (port 9522). On macOS, `host` networking is not supported by Docker Desktop — use Linux or a VM instead.
+</Note>
+
+Start evcc:
+
+```bash
+docker compose up -d
+```
+
+View logs:
+
+```bash
+docker compose logs -f evcc
+```
+
+  </Tab>
+  <Tab title="Linux (apt/rpm)">
+
+evcc provides official packages for Debian/Ubuntu (`.deb`) and Red Hat/Fedora/openSUSE (`.rpm`) via the Cloudsmith repository.
+
+**Debian and Ubuntu:**
+
+```bash
+# Add the evcc repository
+curl -1sLf 'https://dl.cloudsmith.io/public/evcc/stable/setup.deb.sh' | sudo bash
+
+# Install evcc
+sudo apt install evcc
+```
+
+**Red Hat, Fedora, and openSUSE:**
+
+```bash
+# Add the evcc repository
+curl -1sLf 'https://dl.cloudsmith.io/public/evcc/stable/setup.rpm.sh' | sudo bash
+
+# Install evcc (Fedora/RHEL)
+sudo dnf install evcc
+
+# Install evcc (openSUSE)
+sudo zypper install evcc
+```
+
+After installation, evcc runs as a systemd service. The service file is at `/lib/systemd/system/evcc.service` and runs evcc as the `evcc` user.
+
+The default database path is `/var/lib/evcc/evcc.db`. The config file is expected at `/etc/evcc.yaml`.
+
+**Manage the service:**
+
+```bash
+# Start evcc
+sudo systemctl start evcc
+
+# Stop evcc
+sudo systemctl stop evcc
+
+# Enable on boot
+sudo systemctl enable evcc
+
+# View logs
+sudo journalctl -u evcc -f
+```
+
+  </Tab>
+  <Tab title="Raspberry Pi">
+
+evcc runs well on a Raspberry Pi 3 or later running Raspberry Pi OS (64-bit recommended).
+
+Install using the Debian package method:
+
+```bash
+# Add the evcc apt repository
+curl -1sLf 'https://dl.cloudsmith.io/public/evcc/stable/setup.deb.sh' | sudo bash
+
+# Install evcc
+sudo apt install evcc
+```
+
+evcc installs as a systemd service and starts automatically. You can manage it with:
+
+```bash
+sudo systemctl status evcc
+sudo systemctl restart evcc
+sudo journalctl -u evcc -f
+```
+
+<Tip>
+  For a dedicated evcc appliance, use a Raspberry Pi 4 with 2 GB RAM or more. Store the database on an external USB drive rather than the SD card to reduce wear:
+
+  ```bash
+  sudo systemctl edit evcc
+  ```
+
+  Add the following override to change the database path:
+
+  ```ini
+  [Service]
+  Environment="EVCC_DATABASE_DSN=/mnt/usb/evcc.db"
+  ```
+</Tip>
+
+  </Tab>
+  <Tab title="macOS (Homebrew)">
+
+evcc is available via Homebrew for macOS:
+
+```bash
+brew install evcc
+```
+
+Start evcc as a background service:
+
+```bash
+brew services start evcc
+```
+
+View logs:
+
+```bash
+brew services info evcc
+tail -f ~/Library/Logs/evcc/evcc.log
+```
+
+The config file is expected at `~/.evcc/evcc.yaml` or `~/evcc.yaml`.
+
+<Note>
+  On macOS, Docker's `host` networking mode is not available. If you need local device discovery (mDNS, KEBA UDP, SMA Energy Manager), run evcc directly via Homebrew rather than Docker.
+</Note>
+
+  </Tab>
+  <Tab title="Manual binary">
+
+Download a pre-built binary from the [GitHub releases page](https://github.com/evcc-io/evcc/releases).
+
+Choose the file matching your OS and architecture:
+
+| File | Platform |
+|------|----------|
+| `evcc_linux_amd64.tar.gz` | Linux x86-64 |
+| `evcc_linux_arm64.tar.gz` | Linux ARM64 (e.g. Pi 4 64-bit) |
+| `evcc_linux_arm_6.tar.gz` | Linux ARMv6 (e.g. Pi Zero) |
+| `evcc_darwin_amd64.tar.gz` | macOS Intel |
+| `evcc_darwin_arm64.tar.gz` | macOS Apple Silicon |
+
+Extract and install:
+
+```bash
+tar xzf evcc_linux_amd64.tar.gz
+sudo mv evcc /usr/local/bin/evcc
+evcc --version
+```
+
+To run evcc as a systemd service, create `/etc/systemd/system/evcc.service`:
+
+```ini evcc.service
+[Unit]
+Description=evcc
+Requires=network-online.target
+After=syslog.target network.target network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=10
+StartLimitBurst=10
+
+[Service]
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ExecStart=/usr/local/bin/evcc
+Environment="EVCC_DATABASE_DSN=/var/lib/evcc/evcc.db"
+Restart=always
+RestartSec=10
+User=evcc
+Group=evcc
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Create the evcc user and data directory:
+
+```bash
+sudo useradd --system --no-create-home evcc
+sudo mkdir -p /var/lib/evcc
+sudo chown evcc:evcc /var/lib/evcc
+sudo systemctl daemon-reload
+sudo systemctl enable --now evcc
+```
+
+  </Tab>
+</Tabs>
+
+## Configuration file
+
+evcc reads its configuration from `evcc.yaml`. The default search paths are:
+
+1. `~/evcc.yaml` (home directory)
+2. `/etc/evcc.yaml`
+3. The current working directory
+
+You can specify a custom path with the `--config` flag:
+
+```bash
+evcc --config /path/to/evcc.yaml
+```
+
+### Using the configuration wizard
+
+The fastest way to create a valid `evcc.yaml` is the interactive wizard:
+
+```bash
+evcc configure
+```
+
+The wizard walks you through:
+1. Selecting and configuring your **grid meter**
+2. Adding **solar inverters** and **home batteries** (optional)
+3. Configuring one or more **EV chargers** (loadpoints)
+4. Adding **vehicles** for state-of-charge integration (optional)
+5. Entering a **sponsor token** if required by your device
+
+The wizard writes a ready-to-run `evcc.yaml` to the current directory.
+
+### Configuration file structure
+
+Here is the key structure from `evcc.yaml`:
+
+```yaml evcc.yaml
+network:
+  host: evcc        # hostname for mDNS announcement
+  port: 7070        # UI and API port
+
+interval: 30s       # control loop interval (minimum 30s)
+
+# Meters: grid, pv, battery, charge
+meters:
+  - name: grid
+    type: mbmd
+    model: sdm       # SDM630 energy meter
+    uri: rs485.fritz.box:23
+    rtu: true
+    id: 2
+
+# Charger (wallbox) definitions
+chargers:
+  - name: wallbe
+    type: wallbe
+    uri: 192.168.0.8:502
+
+# Vehicle definitions
+vehicles:
+  - name: car1
+    type: renault
+    title: Zoe
+    capacity: 60     # kWh
+    user: myuser
+    password: mypassword
+
+# Site: connects meters to the site
+site:
+  title: Home
+  meters:
+    grid: grid
+    pv:
+      - pv
+    battery:
+      - battery
+
+# Loadpoints: one per charger
+loadpoints:
+  - title: Garage
+    charger: wallbe
+    meter: charge
+    mode: "off"
+
+# Tariffs for cost/CO₂ optimization
+tariffs:
+  currency: EUR
+  grid:
+    type: fixed
+    price: 0.294     # EUR/kWh
+  feedin:
+    type: fixed
+    price: 0.08      # EUR/kWh
+```
+
+<Tip>
+  A full reference with all available options is in the `evcc.dist.yaml` file included with every release. You can also find it in the [evcc GitHub repository](https://github.com/evcc-io/evcc/blob/master/evcc.dist.yaml).
+</Tip>
+
+## Sponsor token
+
+Some features — primarily vehicle APIs for brands that require ongoing reverse-engineering — need a sponsor token. You can request one at [sponsor.evcc.io](https://sponsor.evcc.io).
+
+Once you have a token, add it to `evcc.yaml`:
+
+```yaml evcc.yaml
+sponsortoken: YOUR_TOKEN_HERE
+```
+
+<Note>
+  The sponsor token is per evcc instance. All charger integrations, solar inverter support, and core energy management features are free and do not require a token.
+</Note>
+
+## CLI flags reference
+
+| Flag | Description |
+|------|-------------|
+| `-c`, `--config` | Path to config file (default: `~/evcc.yaml` or `/etc/evcc.yaml`) |
+| `--database` | Database file path (default: `~/.evcc/evcc.db`) |
+| `-l`, `--log` | Log level: `fatal`, `error`, `warn`, `info`, `debug`, `trace` (default: `info`) |
+| `--metrics` | Expose Prometheus metrics at `/metrics` |
+| `--disable-auth` | Disable UI authentication (insecure — do not use on public networks) |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Run the wizard and start your first charge session step by step.
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/configuration/overview">
+    In-depth reference for all configuration options.
+  </Card>
+</CardGroup>

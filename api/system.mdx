@@ -1,0 +1,254 @@
+---
+title: "System"
+description: "Read full system state, query logs, manage the cache, shut down evcc, and configure telemetry."
+---
+
+System endpoints give you access to the complete state of your evcc installation and system-level operations. The `GET /api/state` endpoint is the primary data source for building integrations and dashboards.
+
+Most system write endpoints require an authenticated session. See [Authentication](/api/auth).
+
+---
+
+## GET /api/state
+
+Return the complete system state. This is the same data structure the evcc web UI uses. It includes site-level power values, all loadpoints, all vehicles, and configuration.
+
+### Query parameters
+
+<ParamField query="jq" type="string">
+  A [JQ](https://jqlang.github.io/jq/) expression to filter the state. Use `.` for the full state, `.loadpoints[0]` for the first loadpoint, `.gridPower` for a single field, etc.
+</ParamField>
+
+### Response
+
+<ResponseField name="result" type="object">
+  The full state object. The structure is not formally versioned but is stable between minor releases.
+  <Expandable title="Top-level state fields">
+    <ResponseField name="siteTitle" type="string">Display name of the site.</ResponseField>
+    <ResponseField name="gridPower" type="number">Current grid power in W. Positive = import, negative = export.</ResponseField>
+    <ResponseField name="homePower" type="number">Current household power consumption in W.</ResponseField>
+    <ResponseField name="pvPower" type="number">Current solar generation in W.</ResponseField>
+    <ResponseField name="batteryPower" type="number">Current battery power in W. Positive = discharging, negative = charging.</ResponseField>
+    <ResponseField name="batterySoc" type="number">Home battery state of charge in percent.</ResponseField>
+    <ResponseField name="loadpoints" type="array">Array of loadpoint state objects.</ResponseField>
+    <ResponseField name="vehicles" type="array">Array of configured vehicle state objects.</ResponseField>
+    <ResponseField name="tariffGrid" type="number">Current grid electricity price in configured currency per kWh.</ResponseField>
+    <ResponseField name="tariffFeedIn" type="number">Current feed-in price per kWh.</ResponseField>
+    <ResponseField name="currency" type="string">Configured currency code (e.g. `EUR`).</ResponseField>
+    <ResponseField name="savings" type="object">Accumulated solar savings statistics.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Examples
+
+**Full state:**
+
+```bash
+curl http://evcc.local:7070/api/state
+```
+
+```json
+{
+  "result": {
+    "siteTitle": "My Home",
+    "gridPower": 250,
+    "homePower": 1100,
+    "pvPower": 4200,
+    "batteryPower": -1500,
+    "batterySoc": 62,
+    "tariffGrid": 0.28,
+    "tariffFeedIn": 0.08,
+    "currency": "EUR",
+    "loadpoints": [
+      {
+        "title": "Garage",
+        "mode": "pv",
+        "charging": true,
+        "chargePower": 2900,
+        "chargedEnergy": 8.4,
+        "connectedDuration": 7200,
+        "vehicleSoc": 54,
+        "limitSoc": 80
+      }
+    ]
+  }
+}
+```
+
+**Get only the first loadpoint:**
+
+```bash
+curl "http://evcc.local:7070/api/state?jq=.loadpoints[0]"
+```
+
+**Get current PV power:**
+
+```bash
+curl "http://evcc.local:7070/api/state?jq=.pvPower"
+```
+
+---
+
+## System logs
+
+### GET /api/system/log
+
+Return recent log lines. Requires authentication.
+
+<ParamField query="level" type="string" required>
+  Minimum log level to return. One of: `FATAL`, `ERROR`, `WARN`, `INFO`, `DEBUG`, `TRACE`.
+</ParamField>
+
+<ParamField query="areas" type="string">
+  Comma-separated list of log areas to filter (e.g. `lp-1,site`). Omit to return all areas.
+</ParamField>
+
+<ParamField query="count" type="integer">
+  Number of log lines to return (e.g. `100`).
+</ParamField>
+
+<ParamField query="format" type="string">
+  Pass `txt` to download a plain-text log file instead of JSON.
+</ParamField>
+
+**Response (JSON):**
+
+<ResponseField name="result" type="array">
+  Array of log line strings.
+</ResponseField>
+
+```bash
+curl -b cookies.txt \
+  "http://evcc.local:7070/api/system/log?level=INFO&count=50"
+```
+
+```json
+{
+  "result": [
+    "2025-07-19T22:00:01Z INFO  site: pv surplus: 2400W",
+    "2025-07-19T22:00:01Z INFO  lp-1: charging at 2.4kW"
+  ]
+}
+```
+
+**Download as text file:**
+
+```bash
+curl -b cookies.txt -o evcc.log \
+  "http://evcc.local:7070/api/system/log?level=DEBUG&format=txt"
+```
+
+| Status | Meaning |
+|---|---|
+| `200` | Log lines returned. |
+| `401` | Not authenticated. |
+
+---
+
+### GET /api/system/log/areas
+
+Return a list of all available log area identifiers. Requires authentication.
+
+**Response:**
+
+<ResponseField name="result" type="array">
+  Array of log area name strings (e.g. `["lp-1", "lp-2", "site", "db"]`).
+</ResponseField>
+
+```bash
+curl -b cookies.txt http://evcc.local:7070/api/system/log/areas
+```
+
+```json
+{ "result": ["lp-1", "site", "db", "tariff", "vehicle-1"] }
+```
+
+---
+
+## Cache
+
+### DELETE /api/system/cache
+
+Clear all cached data. This resets cached values from tariff APIs, vehicle APIs, and any other components that use caching. Useful when data seems stale or after changing external service credentials.
+
+Requires authentication.
+
+**Response:**
+
+<ResponseField name="result" type="string">
+  Returns `"OK"` on success.
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X DELETE \
+  http://evcc.local:7070/api/system/cache
+```
+
+```json
+{ "result": "OK" }
+```
+
+| Status | Meaning |
+|---|---|
+| `200` | Cache cleared. |
+| `401` | Not authenticated. |
+
+---
+
+## Shutdown
+
+### POST /api/system/shutdown
+
+Shut down the evcc process. There is no restart command — evcc relies on the host system (Docker, systemd, etc.) to restart the process after it exits.
+
+Requires authentication.
+
+| Status | Meaning |
+|---|---|
+| `204` | Shutdown initiated. No response body. |
+| `401` | Not authenticated. |
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/system/shutdown
+```
+
+<Warning>
+  This terminates the evcc process immediately. Your host system's process manager (Docker restart policy, systemd `Restart=` directive) must be configured to bring it back up.
+</Warning>
+
+---
+
+## Telemetry
+
+### POST /api/settings/telemetry/\{enable\}
+
+Enable or disable telemetry data sharing with the evcc project. Telemetry requires an active sponsor token.
+
+<ParamField path="enable" type="string" required>
+  `true` or `1` to enable, `false` or `0` to disable.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="boolean">
+  Whether telemetry is now active.
+</ResponseField>
+
+| Status | Meaning |
+|---|---|
+| `200` | Telemetry setting updated. |
+| `400` | Sponsorship required — no valid sponsor token configured. |
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/settings/telemetry/true
+```
+
+```json
+{ "result": true }
+```
+
+<Note>
+  Telemetry sends anonymised energy data to the evcc project to help improve automatic device detection and feature prioritisation. It requires a [sponsor token](https://sponsor.evcc.io).
+</Note>

@@ -1,0 +1,264 @@
+---
+title: "Vehicles"
+description: "Manage configured vehicles — set SoC limits, charging plans, and repeating schedules."
+---
+
+Vehicles are identified by their `name` as defined in `evcc.yaml`. The name must contain only alphanumeric characters and `_.:-`. You can retrieve the list of vehicle names and their titles from `GET /api/state` under the `vehicles` key.
+
+All write endpoints require an authenticated session. See [Authentication](/api/auth).
+
+---
+
+## SoC limits
+
+### POST /api/vehicles/\{name\}/limitsoc/\{soc\}
+
+Set the charging limit SoC for a vehicle. Charging stops when the vehicle reaches this level, regardless of which loadpoint it is connected to. The limit persists across charging sessions.
+
+<ParamField path="name" type="string" required>
+  Vehicle name as configured in `evcc.yaml` (e.g. `vehicle_1`).
+</ParamField>
+
+<ParamField path="soc" type="number" required>
+  Target SoC in percent (0–100).
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="object">
+  <Expandable title="result fields">
+    <ResponseField name="soc" type="number">
+      The updated limit SoC in percent.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/vehicles/vehicle_1/limitsoc/80
+```
+
+```json
+{ "result": { "soc": 80 } }
+```
+
+---
+
+### POST /api/vehicles/\{name\}/minsoc/\{soc\}
+
+Set the minimum SoC for a vehicle. The vehicle is fast-charged at full power until this level is reached, even in `pv` or `minpv` mode. This ensures you always have a baseline charge available.
+
+<ParamField path="name" type="string" required>
+  Vehicle name as configured in `evcc.yaml`.
+</ParamField>
+
+<ParamField path="soc" type="number" required>
+  Minimum SoC in percent (0–100).
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="object">
+  <Expandable title="result fields">
+    <ResponseField name="soc" type="number">
+      The updated minimum SoC in percent.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/vehicles/vehicle_1/minsoc/20
+```
+
+```json
+{ "result": { "soc": 20 } }
+```
+
+<Tip>
+  Set `minsoc` to `0` to disable the minimum SoC guarantee and rely entirely on the configured charging mode.
+</Tip>
+
+---
+
+## SoC-based charging plans
+
+### POST /api/vehicles/\{name\}/plan/soc/\{soc\}/\{timestamp\}
+
+Create a one-time SoC-based charging plan. evcc selects the cheapest hours to reach the target SoC by the specified time.
+
+<ParamField path="name" type="string" required>
+  Vehicle name as configured in `evcc.yaml`.
+</ParamField>
+
+<ParamField path="soc" type="number" required>
+  Target SoC in percent (0–100).
+</ParamField>
+
+<ParamField path="timestamp" type="string" required>
+  Target completion time in RFC 3339 format (e.g. `2025-07-20T07:00:00Z`). URL-encode timezone offsets — replace `+` with `%2B`.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="object">
+  <Expandable title="result fields">
+    <ResponseField name="soc" type="number">Confirmed target SoC in percent.</ResponseField>
+    <ResponseField name="time" type="string">Confirmed target time in RFC 3339 format.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  "http://evcc.local:7070/api/vehicles/vehicle_1/plan/soc/80/2025-07-20T07%3A00%3A00Z"
+```
+
+```json
+{ "result": { "soc": 80, "time": "2025-07-20T07:00:00Z" } }
+```
+
+---
+
+### DELETE /api/vehicles/\{name\}/plan/soc
+
+Delete the SoC-based charging plan for a vehicle.
+
+<ParamField path="name" type="string" required>
+  Vehicle name as configured in `evcc.yaml`.
+</ParamField>
+
+```bash
+curl -b cookies.txt -X DELETE \
+  http://evcc.local:7070/api/vehicles/vehicle_1/plan/soc
+```
+
+```json
+{}
+```
+
+---
+
+## Repeating charging plans
+
+### POST /api/vehicles/\{name\}/plan/repeating
+
+Set or update the repeating charging schedule for a vehicle. Each entry in the array defines a recurring slot by weekday and time. Repeating plans are stored per vehicle and activate whenever the vehicle is connected at the scheduled time.
+
+<ParamField path="name" type="string" required>
+  Vehicle name as configured in `evcc.yaml`.
+</ParamField>
+
+**Request body:** An array of repeating plan objects.
+
+<ParamField body="active" type="boolean">
+  Whether this repeating plan slot is active.
+</ParamField>
+
+<ParamField body="soc" type="number">
+  Target SoC in percent (0–100).
+</ParamField>
+
+<ParamField body="time" type="string">
+  Target time in `HH:MM` format (e.g. `07:30`).
+</ParamField>
+
+<ParamField body="tz" type="string">
+  IANA timezone identifier (e.g. `Europe/Berlin`).
+</ParamField>
+
+<ParamField body="weekdays" type="array">
+  Array of weekday numbers. `0` = Sunday, `1` = Monday, `2` = Tuesday, `3` = Wednesday, `4` = Thursday, `5` = Friday, `6` = Saturday.
+</ParamField>
+
+**Response:** The saved array of repeating plan objects.
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/vehicles/vehicle_1/plan/repeating \
+  -H "Content-Type: application/json" \
+  -d '[
+    {
+      "active": true,
+      "soc": 80,
+      "time": "07:00",
+      "tz": "Europe/Berlin",
+      "weekdays": [1, 2, 3, 4, 5]
+    }
+  ]'
+```
+
+```json
+{
+  "result": [
+    {
+      "active": true,
+      "soc": 80,
+      "time": "07:00",
+      "tz": "Europe/Berlin",
+      "weekdays": [1, 2, 3, 4, 5]
+    }
+  ]
+}
+```
+
+---
+
+## Plan strategy
+
+### POST /api/vehicles/\{name\}/plan/strategy
+
+Update the charging plan strategy for a vehicle. This controls how evcc fills the scheduled charging slots.
+
+<ParamField path="name" type="string" required>
+  Vehicle name as configured in `evcc.yaml`.
+</ParamField>
+
+**Request body:**
+
+<ParamField body="continuous" type="boolean">
+  Force continuous charging without pausing between cheap slots.
+</ParamField>
+
+<ParamField body="precondition" type="integer">
+  Pre-conditioning duration in seconds. The vehicle's climate system activates this many seconds before the plan target time.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="result" type="object">
+  <Expandable title="result fields">
+    <ResponseField name="continuous" type="boolean">Whether continuous planning is enabled.</ResponseField>
+    <ResponseField name="precondition" type="integer">Pre-conditioning duration in seconds.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash
+curl -b cookies.txt -X POST \
+  http://evcc.local:7070/api/vehicles/vehicle_1/plan/strategy \
+  -H "Content-Type: application/json" \
+  -d '{"continuous": false, "precondition": 1800}'
+```
+
+```json
+{ "result": { "continuous": false, "precondition": 1800 } }
+```
+
+---
+
+## Vehicle identification
+
+Vehicle names follow the pattern configured in `evcc.yaml`:
+
+```yaml
+vehicles:
+  - name: vehicle_1
+    title: Blue e-Golf
+    type: vw
+    ...
+```
+
+- The `name` field is the identifier used in API paths.
+- The `title` field is the human-readable display name returned in API responses.
+- Names must match the regex `[a-zA-Z0-9_.:-]+`.
+
+To get a list of all configured vehicles and their current state, use `GET /api/state` and read the `vehicles` array from the response.

@@ -1,0 +1,143 @@
+---
+title: "Tariffs"
+description: "Query electricity price and CO₂ emission forecasts used by evcc for smart charging decisions."
+---
+
+evcc uses tariff data to decide when to charge. The tariff endpoints expose the rate forecasts that evcc uses internally for smart charging and charging plans.
+
+All tariff endpoints are unauthenticated read-only requests.
+
+---
+
+## GET /api/tariff/\{type\}
+
+Return the price or emission forecast for the upcoming hours.
+
+<ParamField path="type" type="string" required>
+  The tariff type to query. One of:
+  - `grid` — electricity purchase price (what you pay when drawing from the grid)
+  - `feedin` — electricity sale price (what you earn when feeding into the grid)
+  - `co2` — CO₂ emissions forecast in g/kWh
+  - `planner` — the combined tariff used by the charging planner (merges grid and co2 sources)
+  - `solar` — solar generation forecast
+</ParamField>
+
+### Responses
+
+| Status | Meaning |
+|---|---|
+| `200` | Tariff data returned. |
+| `404` | Tariff type is not configured in `evcc.yaml`. |
+
+### Response
+
+<ResponseField name="result" type="object">
+  <Expandable title="result fields">
+    <ResponseField name="rates" type="array">
+      Array of rate slots covering upcoming hours.
+      <Expandable title="Rate slot fields">
+        <ResponseField name="start" type="string">
+          Start of the slot in RFC 3339 format.
+        </ResponseField>
+        <ResponseField name="end" type="string">
+          End of the slot in RFC 3339 format.
+        </ResponseField>
+        <ResponseField name="value" type="number">
+          Rate value for this slot. Unit depends on tariff type:
+          - `grid` / `feedin` / `planner` — price in configured currency per kWh (default EUR/kWh)
+          - `co2` — CO₂ emissions in g/kWh
+          - `solar` — solar generation forecast in W
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+### Examples
+
+**Get grid electricity prices:**
+
+```bash
+curl http://evcc.local:7070/api/tariff/grid
+```
+
+```json
+{
+  "result": {
+    "rates": [
+      { "start": "2025-07-19T22:00:00Z", "end": "2025-07-19T23:00:00Z", "value": 0.2891 },
+      { "start": "2025-07-19T23:00:00Z", "end": "2025-07-20T00:00:00Z", "value": 0.1823 },
+      { "start": "2025-07-20T00:00:00Z", "end": "2025-07-20T01:00:00Z", "value": 0.1542 },
+      { "start": "2025-07-20T01:00:00Z", "end": "2025-07-20T02:00:00Z", "value": 0.1498 },
+      { "start": "2025-07-20T02:00:00Z", "end": "2025-07-20T03:00:00Z", "value": 0.1612 }
+    ]
+  }
+}
+```
+
+**Get CO₂ emission forecast:**
+
+```bash
+curl http://evcc.local:7070/api/tariff/co2
+```
+
+```json
+{
+  "result": {
+    "rates": [
+      { "start": "2025-07-19T22:00:00Z", "end": "2025-07-19T23:00:00Z", "value": 312 },
+      { "start": "2025-07-19T23:00:00Z", "end": "2025-07-20T00:00:00Z", "value": 287 },
+      { "start": "2025-07-20T00:00:00Z", "end": "2025-07-20T01:00:00Z", "value": 261 }
+    ]
+  }
+}
+```
+
+**Get solar generation forecast:**
+
+```bash
+curl http://evcc.local:7070/api/tariff/solar
+```
+
+```json
+{
+  "result": {
+    "rates": [
+      { "start": "2025-07-20T05:00:00Z", "end": "2025-07-20T06:00:00Z", "value": 450 },
+      { "start": "2025-07-20T06:00:00Z", "end": "2025-07-20T07:00:00Z", "value": 1230 },
+      { "start": "2025-07-20T07:00:00Z", "end": "2025-07-20T08:00:00Z", "value": 2870 }
+    ]
+  }
+}
+```
+
+**Request a tariff that is not configured:**
+
+```bash
+curl http://evcc.local:7070/api/tariff/feedin
+```
+
+```
+HTTP 404
+```
+
+---
+
+## Tariff configuration
+
+Tariffs are configured in `evcc.yaml`. Common providers include Tibber, Octopus Energy, aWATTar, and static fixed-rate definitions. See the [Tariff configuration](/configuration/tariffs) guide for setup instructions.
+
+<Note>
+  The `planner` tariff type is a synthetic tariff that evcc generates internally. It combines price and CO₂ data with solar forecasts to determine the optimal charging windows. You cannot configure it directly.
+</Note>
+
+## How evcc uses tariff data
+
+evcc uses tariff data in two ways:
+
+1. **Smart cost limit** — when `smartcostlimit` is set on a loadpoint, evcc allows fast charging whenever the current rate is below the limit.
+2. **Charging plans** — when a target time and SoC or energy goal are set, evcc selects the cheapest available slots to fill the required charging duration by the deadline.
+
+The planner tariff (`/api/tariff/planner`) shows exactly which slots evcc considers "cheap enough" to use when scheduling a plan.

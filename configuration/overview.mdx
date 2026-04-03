@@ -1,0 +1,228 @@
+---
+title: "Configuration overview"
+description: "Understand the evcc.yaml structure and learn how to configure your home energy management system."
+---
+
+evcc uses a single YAML configuration file — `evcc.yaml` — to define every device, charging point, and energy tariff in your setup. This page walks you through the file structure, core concepts, and how to get started.
+
+## Config file location
+
+By default, evcc looks for the config file at:
+
+- **Linux**: `/etc/evcc.yaml` or `~/evcc.yaml`
+- **macOS**: `~/evcc.yaml`
+- **Docker**: mount your file to `/etc/evcc.yaml`
+
+To use a different path, pass the `--config` flag:
+
+```bash
+evcc --config /path/to/my-config.yaml
+```
+
+<Tip>Run `evcc configure` to launch an interactive wizard that detects your devices and generates an initial config file automatically.</Tip>
+
+## Using `evcc configure`
+
+The `evcc configure` wizard walks you through device setup step by step: it detects meters, chargers, and vehicles on your network and writes a valid config for you.
+
+<Steps>
+  <Step title="Run the wizard">
+    ```bash
+    evcc configure
+    ```
+  </Step>
+  <Step title="Follow the prompts">
+    Select your grid meter, PV inverter, battery, charger, and vehicles from the presented lists. evcc queries your local network to auto-discover supported devices.
+  </Step>
+  <Step title="Review the generated file">
+    The wizard writes `evcc.yaml` to your current directory. Open it to review and adjust any values.
+  </Step>
+  <Step title="Start evcc">
+    ```bash
+    evcc
+    ```
+    Open `http://evcc:7070` in your browser to see the dashboard.
+  </Step>
+</Steps>
+
+## File structure
+
+A complete `evcc.yaml` is composed of several top-level sections. Here is the full reference file with annotations:
+
+```yaml evcc.yaml
+network:
+  # Hostname for mDNS announcements (set to Docker host name when using Docker)
+  host: evcc
+  # Port for the UI and REST API
+  port: 7070
+  # Public URL when behind a reverse proxy
+  externalurl: https://behind-reverse-proxy
+
+# Control cycle interval — values below 30s can cause unexpected behavior
+interval: 30s
+
+# Sponsor token enables optional features
+# sponsortoken:
+
+# Log level for the main logger
+log: info
+levels:
+  site: debug
+  lp-1: debug
+  lp-2: debug
+  cache: error
+  db: error
+
+# Meter definitions — named references used in site and loadpoints
+meters:
+  - name: grid
+    type: mbmd
+    model: sdm
+    uri: rs485.fritz.box:23
+    rtu: true
+    id: 2
+  - name: pv
+    type: ...
+  - name: battery
+    type: ...
+
+# Charger definitions — named references used in loadpoints
+chargers:
+  - name: wallbe
+    type: wallbe
+    uri: 192.168.0.8:502
+
+# Vehicle definitions — named references used in loadpoints
+vehicles:
+  - name: car1
+    type: renault
+    title: Zoe
+    capacity: 60 # kWh
+    user: myuser
+    password: mypassword
+    vin: WREN...
+    onIdentify:
+      mode: pv # switch to PV mode when this vehicle is plugged in
+
+# Site — describes your home's energy connection
+site:
+  title: Home
+  meters:
+    grid: grid         # grid meter name
+    pv:
+      - pv             # list of PV meters/inverters
+    battery:
+      - battery        # list of battery meters
+    aux:
+      - aux            # auxiliary meters for load adjustment
+  residualPower: 0     # additional household consumption margin (W)
+
+# Loadpoints — one entry per charging station
+loadpoints:
+  - title: Garage
+    charger: wallbe    # charger name
+    meter: charge      # dedicated charge meter (if charger has no built-in meter)
+    mode: "off"        # default mode when no vehicle is connected
+
+    priority: 0        # relative priority for PV surplus distribution
+    soc:
+      poll:
+        mode: charging   # when to poll the vehicle API
+        interval: 60m    # how often when not charging
+      estimate: true     # interpolate SoC between API updates
+    enable:
+      delay: 1m
+      threshold: 0       # export threshold to enable PV charging (W)
+    disable:
+      delay: 3m
+      threshold: 0       # import threshold to disable PV charging (W)
+
+# Tariffs — grid price, feed-in rate, CO2 intensity, solar forecast
+tariffs:
+  currency: EUR
+  grid:
+    type: fixed
+    price: 0.294 # EUR/kWh
+    zones:
+      - days: Mon-Fri
+        hours: 2-5
+        price: 0.2
+      - days: Sat,Sun
+        price: 0.15
+  feedin:
+    type: fixed
+    price: 0.08 # EUR/kWh
+
+# MQTT broker (optional)
+mqtt:
+  # broker: localhost:1883
+  # topic: evcc
+
+# InfluxDB export (optional)
+influx:
+  # url: http://localhost:8086
+  # database: evcc
+
+# Push notifications (optional)
+messaging:
+  events:
+    start:
+      title: Charge started
+      msg: Started charging in "${mode}" mode
+    stop:
+      title: Charge finished
+      msg: Finished charging ${chargedEnergy:%.1fk}kWh in ${chargeDuration}.
+```
+
+## Core concepts
+
+### Site
+
+The **site** represents your home's connection to the electricity grid. It ties together your energy meters and sets a `residualPower` margin — a buffer (in watts) that evcc keeps free from PV surplus before offering it to EV charging.
+
+### Loadpoints
+
+A **loadpoint** is a physical charging station. Each loadpoint references a charger and, optionally, a dedicated charge meter. You can have multiple loadpoints — for example, a garage socket and a carport charger — each with its own charging mode and priority.
+
+### Meters
+
+**Meters** measure power flows in your home. evcc distinguishes five roles:
+
+| Role      | Measures                                               |
+| --------- | ------------------------------------------------------ |
+| `grid`    | Power imported from or exported to the public grid     |
+| `pv`      | Power produced by your solar panels                    |
+| `battery` | Power flowing into or out of a home battery            |
+| `charge`  | Power delivered to a vehicle at a specific loadpoint   |
+| `aux`     | Auxiliary loads to consider when calculating surplus   |
+
+A single device (e.g., a hybrid inverter) can provide multiple meter roles by being listed under multiple names.
+
+### Chargers
+
+A **charger** is the EVSE hardware that physically controls the charging process. evcc sends current set-points to the charger and reads back status information.
+
+### Vehicles
+
+**Vehicles** connect to manufacturer cloud APIs to read the battery's state of charge (SoC). Knowing the SoC allows evcc to stop charging at a target limit and enables smart charge planning.
+
+### Tariffs
+
+**Tariffs** tell evcc what electricity costs (or earns) at any given time. With a dynamic tariff, evcc can shift charging sessions to the cheapest hours of the day automatically.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Meters" icon="gauge" href="/configuration/meters">
+    Configure grid, PV, battery, and charge meters.
+  </Card>
+  <Card title="Chargers" icon="bolt" href="/configuration/chargers">
+    Set up your EVSE hardware.
+  </Card>
+  <Card title="Vehicles" icon="car" href="/configuration/vehicles">
+    Connect vehicle cloud APIs for SoC data.
+  </Card>
+  <Card title="Tariffs" icon="receipt" href="/configuration/tariffs">
+    Add fixed or dynamic electricity prices.
+  </Card>
+</CardGroup>
